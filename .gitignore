@@ -1,0 +1,8 @@
+﻿node_modules/
+dist/
+.omnipost/
+artifacts/
+resources/bin/*/
+.env
+.env.*
+*.log

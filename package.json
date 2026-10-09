@@ -1,0 +1,20 @@
+{
+  "name": "omnipost",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OmniPost portable, durable video download engine",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "fetch": "node dist/tools/fetch.js",
+    "setup:tools": "node tools/setup-tools.mjs",
+    "verify:tools": "node tools/verify-tools.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "~5.9.3"
+  }
+}

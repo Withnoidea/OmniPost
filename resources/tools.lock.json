@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "target": "win32-x64",
+  "ytDlp": {
+    "version": "2026.08.19",
+    "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+    "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a"
+  },
+  "ffmpeg": {
+    "version": "9.0.2",
+    "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
+    "sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
+    "directory": "ffmpeg-9.0.2-essentials_build"
+  },
+  "node": {
+    "version": "22.23.3",
+    "url": "https://nodejs.org/dist/v22.23.3/win-x64/node.exe",
+    "sha256": "9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e"
+  }
+}
