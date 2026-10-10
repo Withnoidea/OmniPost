@@ -1,6 +1,6 @@
 # OmniPost Desktop — Studio / Analytics / Settings
 
-Electron + Vite + React / TypeScript + TailwindCSS + Lucide。Zinc 暖深灰底色、陶土强调色、无边框圆角窗口与安全 IPC；无需浏览器外壳或假的后端接口。
+Electron + Vite + React / TypeScript + TailwindCSS + Lucide。默认燕麦暖白 / 可切换 Zinc 夜间主题、陶土强调色、无边框圆角窗口与安全 IPC；无需浏览器外壳或假的后端接口。
 
 ## 工程结构
 
@@ -25,7 +25,7 @@ apps/desktop/
 │       ├── model.ts              单调事件合并与格式化
 │       ├── styles.css            设计 token、语义样式、微交互、减弱动效
 │       └── main.tsx / index.html React 入口 / CSP
-└── tests/desktop.test.mjs         10 项离线边界测试
+└── tests/                        离线边界与主题回归测试
 ```
 
 ## 启动
@@ -77,3 +77,13 @@ renderer 不可直接访问文件系统、Node、任意 IPC 或浏览器外跳�
 ## 验收
 
 参见 [OVERNIGHT_PROGRESS.md](../OVERNIGHT_PROGRESS.md)。在线 YouTube 实测曾返回 AUTH_REQUIRED，未声称无凭据抓取通过；离线流程使用明确标注的自制 FFmpeg 视频和 loopback Mock LLM，测试不需要 API 费用。
+
+
+## 日间 / 夜间主题
+
+- 默认日间暖调：全局 `#FAF9F5`、侧栏 `#F3F0EA`、纸白浮层，陶土色 `#D97757` 用于主操作。右上角月亮 / 太阳按钮一键切换夜间 / 日间。
+- 偏好存储在当前桌面 profile 的 `localStorage["omnipost.theme"]`，重载和重启均保留；不跟随系统自动变化。存储不可用时仍可在本次会话中切换。
+- `renderer/public/theme-init.js` 是 CSP 允许的本地同步脚本，在 CSS 与 React 加载前恢复 `.dark`，避免主题闪烁；未放宽 `script-src`。
+- `renderer/styles.css` 的 `:root` / `.dark` 集中定义背景、边框、文字、强调色、状态、图表与阴影，`@theme inline` 暴露 Tailwind 语义色。组件及 SVG 图表不硬编码主题颜色。
+- 平台 Tab 使用内嵌滑块，支持方向键、Home / End 和可见焦点；系统「减少动态效果」设置会关闭滑动与装饰动画。
+- `npm run desktop:test` 包含默认主题、偏好恢复、存储异常、切换以及颜色 token 完整性的回归测试。

@@ -167,7 +167,7 @@ function registerIPC(): void {
 }
 function createWindow(): void {
   window = new BrowserWindow({ width: 1240, height: 900, minWidth: 980, minHeight: 720, frame: false, roundedCorners: true, hasShadow: true,
-    backgroundColor: '#18181b', show: false, title: 'OmniPost · 全播', autoHideMenuBar: true,
+    backgroundColor: '#FAF9F5', show: false, title: 'OmniPost · 全播', autoHideMenuBar: true,
     webPreferences: { preload: path.join(here, '../preload/index.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());

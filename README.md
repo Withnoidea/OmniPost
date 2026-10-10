@@ -1,28 +1,81 @@
 # OmniPost · 全播
 
-跨境短视频智能分发桌面助手。**当前交付：Electron Studio + Fetcher + 四平台 AI 改写 + FFmpeg 处理 + Analytics + 统一设置。发布入口明确标为待配置账号，尚未实现 RPA 发布。**
+> **跨境短视频智能分发桌面助手** · 一站式海外素材抓取、多平台 AI 本地化改写、去重加工与数据大屏监控。
 
-技术路线：Electron + React + TailwindCSS + Lucide；核心采用 TypeScript/Node.js。AIRewriter、FFmpeg Processor 以及后续 Playwright Publisher 都消费已提交的本地资产，不反向影响原始素材。
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D22.12.0-brightgreen.svg)](https://nodejs.org/)
+[![Electron](https://img.shields.io/badge/Electron-35.x-blue.svg)](https://www.electronjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/)
+[![License](https://img.shields.io/badge/license-Private-orange.svg)](#)
 
-## 启动桌面端（Windows）
+---
+
+## 📸 界面预览 (Screenshots)
+
+### 1. 核心工作台与双主题切换 (Studio & Theme Modes)
+OmniPost 采用对齐 Claude Desktop 与 cc-switch 的精致桌面美学设计，支持深色/浅色模式平滑切换，重启后自动记忆。
+
+| 浅色日间模式（燕麦暖白 · 纸白卡片） | 深色夜间模式（极客深灰 · 沉浸低噪） |
+| :---: | :---: |
+| ![Studio Light Mode](docs/assets/studio-light.png) | ![Studio Dark Mode](docs/assets/studio-dark.png) |
+
+---
+
+### 2. 多平台文案本地化与处理 (Content Localization & Review)
+支持针对 **小红书、B站、抖音、快手** 四大国内主流平台进行风格差异化改写（Emoji、网梗、标签、防限流分词），并提供所见即所得的人工精修与字数/标签实时监控。
+
+![Content Localization](docs/assets/content-localization.png)
+
+---
+
+### 3. 数据监控大屏 (Analytics Dashboard)
+聚合展示资产总库容、各平台分发态势、时长分布、以及矩阵账号转化与播放量追踪。
+
+![Analytics Dashboard](docs/assets/analytics.png)
+
+---
+
+### 4. 统一设置面板 (Settings & Configuration)
+集成 LLM 模型服务配置（DeepSeek / OpenAI 兼容）、网络独立代理（HTTP/SOCKS5）、便携工具链检测及安全存储。
+
+![Settings Panel](docs/assets/settings.png)
+
+---
+
+## 🌟 核心特性
+
+- 🎬 **智能元数据与音视频解耦**：首创元数据优先机制（`fetchMetadata`），几秒内秒级捕获标题、原封面与简介；支持手动绑定外部大文件 MP4，规避网络堵塞。
+- 🤖 **四平台矩阵改写引擎**：针对小红书爆款种草、B站深度玩梗、抖音强钩子节奏、快手接地气老铁风格定制专属 Prompt，支持原子化保存与人工复核。
+- ⚙️ **工业级便携工具链**：内置开箱即用的便携式 yt-dlp (`2026.08.19`) 与 FFmpeg (`9.0.2`)，零全局环境变量污染，不干扰用户本机配置。
+- 📊 **可视化发布看板**：多维度内容表现洞察，资产状态机全流程可视（草稿、改写就绪、处理中、已完成）。
+- 🎨 **顶级桌面审美**：燕麦暖白与 Zinc 极简深色双模式，全本地持久化存储，保障跨境创作者的核心资产与 API 隐私安全。
+
+---
+
+## 🚀 快速启动（Windows x64）
+
+### 启动桌面端 (Electron Studio)
 
 ```powershell
 npm install
 npm run dev
 ```
 
-依赖已安装时直接运行 `npm run dev`。Electron 运行时由安装脚本自动准备；本仓库现有的便携 yt-dlp / ffprobe 无需手工配置 PATH。
-支持链接解析、代理设置、封面预览、原生选择/拖入 MP4、四平台 AI 改写与人工编辑、真实 FFmpeg 进度、独立 Analytics 及重启恢复。开发默认复用 `.omnipost` 素材库，**不要同时启动占用同目录的 CLI 调度器**。
+> **提示**：仓库已自带锁定版本的便携工具。首次运行直接执行 `npm run dev` 即可唤起桌面工作台窗口。开发调试默认复用 `.omnipost` 素材库，**请勿同时在同目录启动 CLI 调度器**。
 
-- `npm run desktop:build`：桌面类型检查 + 构建（不是安装包）。
-- `npm run desktop:check`：桌面严格 TypeScript 检查。
-- `npm run desktop:test`：10 项离线桌面边界/状态测试。
-- `npm test`：69 项核心测试（包括原有 37 项 Fetcher 回归，离线全通过）。
-- `npm run typecheck`：整仓 Core + desktop 严格类型检查。
+### 常用命令矩阵
 
-工程设计、IPC 契约、数据目录见 [桌面端文档](docs/desktop.md)；完整验收记录与 Mock 复现步骤见 [OVERNIGHT_PROGRESS.md](OVERNIGHT_PROGRESS.md)。
+| 命令 | 说明 |
+| :--- | :--- |
+| `npm run dev` | 启动桌面开发端（Electron + Vite HMR） |
+| `npm run desktop:build` | 桌面端 TypeScript 检查与打包构建 |
+| `npm run desktop:check` | 桌面端严格类型诊断 |
+| `npm run desktop:test` | 桌面端离线 IPC 与状态边界测试（10 tests） |
+| `npm test` | 核心引擎全量测试（Fetcher + Rewriter，离线通过） |
+| `npm run typecheck` | 整仓（Core + Desktop）全量严格类型核验 |
 
-## 工程目录
+---
+
+## 🏗️ 架构与工程目录
 
 ```text
 OmniPost/
