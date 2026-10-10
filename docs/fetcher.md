@@ -158,7 +158,7 @@ npm run fetch -- --list
 
 执行：`npm run check`、`npm test`、`npm run verify:tools`、CLI `--help`。
 
-- 37 项测试通过、0 跳过：包含原下载回归、真实 Windows 父/孙进程取消，以及元数据独立队列/超时、缺少 FFmpeg 的轻量运行、只需 ffprobe 的绑定、非法文件/重复绑定、取消预检竞争、重启与提交/日志故障恢复。
+- Fetcher 相关37项测试保持通过、0跳过（加入 Rewriter 后总数见 README）：包含原下载回归、真实 Windows 父/孙进程取消，以及元数据独立队列/超时、缺少 FFmpeg 的轻量运行、只需 ffprobe 的绑定、非法文件/重复绑定、取消预检竞争、重启与提交/日志故障恢复。
 - 便携集成测试：FFmpeg 生成自制 fixture，本地带 Basic auth 的 HTTP 正向代理，真实 yt-dlp 载入预制 info JSON（仅替换源站提取步骤）；真实下载/合并/探测和封面字节校验。
 - 同一集成测试验证元数据模式有封面请求、**零音视频请求**；真实 API 绑定、关闭后真实 CLI `--attach` 恢复任务，源文件不变且无需网络。
 - 清空 PATH 运行便携工具；未访问 YouTube/TikTok 或依赖第三方账户。外部 SOCKS 服务、源站线上提取/耗时与用户代理尚未验收，不能将本地 fixture 通过表述为线上全可用。

@@ -1,0 +1,45 @@
+import type { RewrittenDocument, RewriteTaskResult, RewriteProgress, TargetPlatform, LocalizedCopy } from '../../../../packages/core/src/rewriter/types.js';
+import type { ProcessedDocument, ProcessingSettings, ProcessingProgress } from '../../../../packages/core/src/processor/types.js';
+import type { AnalyticsSnapshot } from '../../../../packages/core/src/telemetry.js';
+export type { RewrittenDocument, RewriteTaskResult, TargetPlatform, LocalizedCopy, ProcessedDocument, ProcessingSettings, AnalyticsSnapshot };
+export interface StudioSettings {
+  ai: { baseURL: string; model: string; temperature: number; jsonMode: boolean; hasApiKey: boolean; persisted: boolean };
+  processor: ProcessingSettings;
+}
+export interface SettingsInput { ai: { baseURL: string; model: string; temperature: number; jsonMode: boolean; apiKey?: string }; processor: ProcessingSettings }
+export interface TaskLibrary { rewritten: RewrittenDocument | null; processed: ProcessedDocument | null; active: ('rewrite' | 'process')[] }
+export type StudioEvent = { kind: 'rewrite'; progress: RewriteProgress } | { kind: 'process'; progress: ProcessingProgress } | { kind: 'settled'; taskId: string; operation: 'rewrite' | 'process' };
+import type { DownloadTask } from '../../../../packages/core/src/fetcher/types.js';
+export type { DownloadTask, TaskState, VideoMetadata } from '../../../../packages/core/src/fetcher/types.js';
+export interface DesktopFailure { code: string; message: string }
+export type Reply<T> = { ok: true; value: T } | { ok: false; error: DesktopFailure };
+export interface ProxySettings { enabled: boolean; url: string; persisted: boolean }
+export interface Snapshot { tasks: DownloadTask[]; proxy: ProxySettings; version: string; dataDirectory: string }
+export interface TaskAssets {
+  cover: string | null;
+  video: { bytes: number; width: number | null; height: number | null; file: string } | null;
+}
+export interface DesktopEvent { task: DownloadTask; kind: 'state' | 'metadata' | 'success' | 'failure' }
+export interface ElectronAPI {
+  studioSettings(): Promise<Reply<StudioSettings>>;
+  saveStudioSettings(settings: SettingsInput): Promise<Reply<StudioSettings>>;
+  library(taskId: string): Promise<Reply<TaskLibrary>>;
+  rewrite(taskId: string, platforms: TargetPlatform[]): Promise<Reply<RewriteTaskResult>>;
+  saveCopy(taskId: string, platform: TargetPlatform, copy: LocalizedCopy, revision: string): Promise<Reply<RewrittenDocument>>;
+  processMedia(taskId: string): Promise<Reply<ProcessedDocument>>;
+  cancelStudio(taskId: string, kind: 'rewrite' | 'process'): Promise<Reply<void>>;
+  analytics(): Promise<Reply<AnalyticsSnapshot>>;
+  onStudio(listener: (event: StudioEvent) => void): () => void;
+  snapshot(): Promise<Reply<Snapshot>>;
+  fetchMetadata(url: string): Promise<Reply<DownloadTask>>;
+  selectAndAttach(taskId: string): Promise<Reply<DownloadTask | null>>;
+  attachDroppedFile(taskId: string, file: File): Promise<Reply<DownloadTask>>;
+  assets(taskId: string): Promise<Reply<TaskAssets>>;
+  cancel(taskId: string): Promise<Reply<void>>;
+  setProxy(settings: Pick<ProxySettings, 'enabled' | 'url'>): Promise<Reply<ProxySettings>>;
+  openAssets(taskId: string): Promise<Reply<void>>;
+  copyText(text: string): Promise<Reply<void>>;
+  windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<Reply<void>>;
+  onTask(listener: (event: DesktopEvent) => void): () => void;
+}
+declare global { interface Window { electronAPI: ElectronAPI } }

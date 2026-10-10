@@ -7,12 +7,13 @@ export interface ProcessRequest {
   cwd: string;
   signal: AbortSignal;
   onLine: (line: string) => void;
+  onStderrLine?: (line: string) => void;
 }
 export interface ProcessResult { exitCode: number | null; stderr: string }
 export type ProcessRunner = (request: ProcessRequest) => Promise<ProcessResult>;
 
 /** No shell. Cancellation waits for the entire process tree and inherited pipes to close. */
-export const runProcess: ProcessRunner = async ({ executable, args, cwd, signal, onLine }) => {
+export const runProcess: ProcessRunner = async ({ executable, args, cwd, signal, onLine, onStderrLine }) => {
   if (signal.aborted) throw abortError(signal);
   return new Promise((resolve, reject) => {
     const env: NodeJS.ProcessEnv = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' };
@@ -23,6 +24,7 @@ export const runProcess: ProcessRunner = async ({ executable, args, cwd, signal,
     const child = spawn(executable, args, { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
     let stderr = '';
     let stdout = '';
+    let stderrLine = '';
     let spawnFailed = false;
     let killer: ReturnType<typeof spawn> | undefined;
     let killFinished: Promise<void> | undefined;
@@ -54,11 +56,21 @@ export const runProcess: ProcessRunner = async ({ executable, args, cwd, signal,
       }
       if (stdout.length > 1024 * 1024) stdout = '';
     });
-    child.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-32768); });
+    child.stderr.on('data', (chunk: string) => {
+      stderr = (stderr + chunk).slice(-32768);
+      stderrLine += chunk;
+      let end: number;
+      while ((end = stderrLine.indexOf('\n')) >= 0) {
+        const line = stderrLine.slice(0, end).replace(/\r$/, ''); stderrLine = stderrLine.slice(end + 1);
+        try { onStderrLine?.(line); } catch { /* isolated progress observer */ }
+      }
+      if (stderrLine.length > 32768) stderrLine = '';
+    });
     child.once('error', () => { spawnFailed = true; });
     child.once('close', (exitCode) => {
       signal.removeEventListener('abort', stop);
       if (stdout) { try { onLine(stdout); } catch { /* same isolation as above */ } }
+      if (stderrLine) { try { onStderrLine?.(stderrLine); } catch { /* isolated */ } }
       void (async () => {
         await killFinished;
         if (signal.aborted) reject(abortError(signal));

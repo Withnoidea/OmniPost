@@ -4,17 +4,28 @@
   "private": true,
   "type": "module",
   "description": "OmniPost portable, durable video download engine",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "fetch": "node dist/tools/fetch.js",
+    "rewrite": "node dist/tools/rewrite.js",
     "setup:tools": "node tools/setup-tools.mjs",
-    "verify:tools": "node tools/verify-tools.mjs"
+    "verify:tools": "node tools/verify-tools.mjs",
+    "dev": "npm run dev --workspace @omnipost/desktop",
+    "desktop:build": "npm run build --workspace @omnipost/desktop",
+    "desktop:check": "npm run check --workspace @omnipost/desktop",
+    "desktop:test": "node --experimental-strip-types --test apps/desktop/tests/*.test.mjs",
+    "typecheck": "npm run check && npm run desktop:check"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "typescript": "~5.9.3"
-  }
+  },
+  "workspaces": [
+    "apps/desktop"
+  ]
 }

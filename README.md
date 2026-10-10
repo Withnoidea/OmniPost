@@ -1,16 +1,36 @@
 # OmniPost · 全播
 
-跨境短视频智能分发桌面助手。**当前交付：第 1 模块 Fetcher（下载与元数据调度），不是完整桌面客户端。**
+跨境短视频智能分发桌面助手。**当前交付：Electron Studio + Fetcher + 四平台 AI 改写 + FFmpeg 处理 + Analytics + 统一设置。发布入口明确标为待配置账号，尚未实现 RPA 发布。**
 
-技术路线：Electron + React + TailwindCSS + Lucide；核心采用 TypeScript/Node.js。后续 FFmpeg Processor、OpenAI 兼容 AIRewriter、Playwright Publisher 都消费已提交的本地资产，不反向影响原始素材。
+技术路线：Electron + React + TailwindCSS + Lucide；核心采用 TypeScript/Node.js。AIRewriter、FFmpeg Processor 以及后续 Playwright Publisher 都消费已提交的本地资产，不反向影响原始素材。
+
+## 启动桌面端（Windows）
+
+```powershell
+npm install
+npm run dev
+```
+
+依赖已安装时直接运行 `npm run dev`。Electron 运行时由安装脚本自动准备；本仓库现有的便携 yt-dlp / ffprobe 无需手工配置 PATH。
+支持链接解析、代理设置、封面预览、原生选择/拖入 MP4、四平台 AI 改写与人工编辑、真实 FFmpeg 进度、独立 Analytics 及重启恢复。开发默认复用 `.omnipost` 素材库，**不要同时启动占用同目录的 CLI 调度器**。
+
+- `npm run desktop:build`：桌面类型检查 + 构建（不是安装包）。
+- `npm run desktop:check`：桌面严格 TypeScript 检查。
+- `npm run desktop:test`：10 项离线桌面边界/状态测试。
+- `npm test`：69 项核心测试（包括原有 37 项 Fetcher 回归，离线全通过）。
+- `npm run typecheck`：整仓 Core + desktop 严格类型检查。
+
+工程设计、IPC 契约、数据目录见 [桌面端文档](docs/desktop.md)；完整验收记录与 Mock 复现步骤见 [OVERNIGHT_PROGRESS.md](OVERNIGHT_PROGRESS.md)。
 
 ## 工程目录
 
 ```text
 OmniPost/
-├─ apps/desktop/                         [后续，不创建空实现]
-│  ├─ electron/                         宿主、IPC、安全配置、生命周期
-│  └─ renderer/                         React 暗色队列、账号卡片、代理设置
+├─ apps/desktop/                         [已实现] Electron + Vite 桌面工作台
+│  ├─ src/main/                         窗口、安全 IPC、加密设置、Studio 调度
+│  ├─ src/preload/                      sandbox 安全桥接（输出 CJS）
+│  ├─ src/shared/                       IPC 类型契约
+│  └─ src/renderer/                     React + Tailwind Studio / Analytics / Settings
 ├─ packages/core/src/
 │  ├─ index.ts                          对外类型/API
 │  ├─ fetcher/                          [本轮已实现]
@@ -21,8 +41,8 @@ OmniPost/
 │  │  ├─ downloader.ts                  yt-dlp 参数、ffprobe、元数据归一化
 │  │  ├─ store.ts                       日志、独占锁、原子提交、完整性摘要
 │  │  └─ scheduler.ts                   并发队列、超时、取消、重试、恢复
-│  ├─ processor/                        [后续] 变速/裁剪/音轨/元数据清理
-│  ├─ rewriter/                         [后续] OpenAI 兼容客户端与平台提示词
+│  ├─ processor/                        [已实现] 变速/裁剪/音轨/元数据清理
+│  ├─ rewriter/                         [已实现] 兼容 API、四平台 Prompt、逐平台落盘
 │  └─ publisher/                        [后续] Playwright 平台适配器/HITL
 ├─ resources/
 │  ├─ tools.lock.json                   固定版本、下载地址、SHA-256
@@ -35,15 +55,17 @@ OmniPost/
 │     └─ tools.manifest.json            安装后二进制摘要
 ├─ tools/
 │  ├─ fetch.ts                          下载 CLI
+│  ├─ rewrite.ts                        文案改写 CLI
 │  ├─ setup-tools.mjs                   构建时准备便携依赖
 │  └─ verify-tools.mjs                  便携工具完整性/可执行验证
 ├─ tests/                               离线单元、进程树、便携工具集成测试
 ├─ docs/architecture.md                 模块边界与后续交付计划
-├─ docs/fetcher.md                      API、持久化、错误码和验收边界
+├─ docs/fetcher.md                      下载 API、持久化、错误码和验收边界
+├─ docs/rewriter.md                     改写 API、配置、输出 schema 和验收边界
 └─ .omnipost/                           默认开发数据目录；不进 Git
 ```
 
-## 本轮能力
+## Fetcher 能力
 
 - 仅接收 HTTPS YouTube/TikTok **单视频**链接；支持 YouTube watch、youtu.be、shorts，TikTok 完整/短分享链接。自动移除追踪参数，不会展开播放列表。
 - 默认下载视频、**原始格式/原始字节封面**、yt-dlp 原始 info JSON；另生成供 AI 使用的规范化元数据。
@@ -174,9 +196,29 @@ Electron 后续将使用 `app.getPath('userData')` 存数据，`process.resource
 
 下载阶段的合并/重封装**不是**去重转码。1.02× 变速、1% 裁剪、音轨重采样、清除元数据将在下一模块实现，输出到新的衍生资产目录，不改写原始资产。
 
+## AIRewriter：先改文案，再绑定视频
+
+`AWAITING_MEDIA` 阶段即可使用，保持原任务状态不变。仅发送筛选后的标题/描述/标签/已有字幕文本，不上传视频或整份 info JSON。
+
+```powershell
+# 同样需要先 npm run build；taskId 来自 fetch --info-only 的回执
+$env:OMNIPOST_LLM_API_KEY = '<你的 DeepSeek Key>'
+npm run rewrite -- '<taskId>' --platform xhs,bili
+
+# OpenAI 兼容端点：显式配置对应的 Key、API 根与模型
+npm run rewrite -- '<taskId>' --platform dy,ks --base-url 'https://api.openai.com/v1' --model 'gpt-4o-mini'
+Remove-Item Env:OMNIPOST_LLM_API_KEY
+```
+
+- 支持四平台完整名称和 CLI 别名 `xhs,bili,dy,ks`；默认 DeepSeek，可配置本地 Ollama 的 `/v1` 地址和实际安装模型。
+- 配置 `apiKey/baseURL/model/temperature`，默认每平台60秒截止；可关闭 JSON mode 适配旧服务，无隐式付费重试。
+- 各平台成功即原子合并到 `assets/<taskId>/rewritten.json`，失败保留此前成功结果及原素材，不等待视频实体。
+- 完整平台 API、JSON schema、配置与事件见 [Rewriter 文档](docs/rewriter.md)。只继承 OmniPost 专用环境变量，不自动读取其他工具的 `OPENAI_API_KEY`。
+- 字幕仅有 URL 时只提供可用语言信息，不自动下载字幕或虚构内容；“热门话题”不是实时热榜，分区是建议。
+
 ## 验证与边界
 
-`npm test` 当前 37 项通过、0 跳过，覆盖原下载回归及元数据独立队列、惰性工具校验、挂载验证/取消/重试、崩溃恢复和落盘失败。
+`npm test` 当前 60 项通过、0 跳过：原37项 Fetcher/便携工具测试保持通过，新增23项 Rewriter 离线 Mock/真实本地 HTTP/CLI 测试。覆盖改写 JSON 容错、逐平台保存、部分失败、并发锁、密钥隔离、超时取消与源信息变化保护。
 
 集成测试使用自制音视频 + 本地认证 HTTP 代理，在 **PATH 清空** 的情况下执行真实 yt-dlp、FFmpeg 合流和 ffprobe，并核对原始封面字节；额外验证元数据模式 **零音视频请求**、真实 API/CLI 本地绑定；不需要外网。未准备便携工具时该项明确标记为 skipped，其余测试仍可运行。
 
@@ -185,6 +227,6 @@ Electron 后续将使用 `app.getPath('userData')` 存数据，`process.resource
 - 不提供 DRM、付费限制、登录或验证码绕过；遇到此类问题返回明确错误。无水印取决于源站提供的媒体，不做水印擦除承诺。
 - 源站提供多少语言信息就保留多少；本轮不做翻译、不额外下载字幕，不虚构多语言标题。
 - 原始 info JSON 可能含签名媒体 URL，应视为敏感本地文件。Windows 继承用户目录 ACL，POSIX 新建目录/日志使用 0700/0600。代理密码在工具运行时仍可能被同权限本机进程从进程参数读取，不能将环境变量用法理解为操作系统级秘密隔离。
-- 此轮没有 UI、AI 改写、Playwright 分发、账号隔离、stealth 或 HITL 空实现。只下载你有权处理与发布的内容，并遵守平台条款。
+- 此轮没有 UI、Playwright 分发、账号隔离、stealth 或 HITL 空实现。AI 改写产物需人工审稿，并未接入自动发布。只下载你有权处理与发布的内容，并遵守平台条款。
 
 更多细节见 [下载模块契约](docs/fetcher.md) 和 [架构设计](docs/architecture.md)。

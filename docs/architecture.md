@@ -1,3 +1,5 @@
+> 当前完整桌面实现与事务细节见 [desktop.md](desktop.md)、[processor.md](processor.md) 和 [交付记录](../OVERNIGHT_PROGRESS.md)。下文早期路线图中的桌面、AI、Processor 阶段均已交付；Publisher 仍未实现。
+
 # 架构与渐进交付
 
 ## 边界
@@ -31,7 +33,7 @@ DownloadScheduler → Fetcher
 | `apps/desktop/electron` | 应用生命周期、IPC、系统托盘、配置和凭据保管、资源路径 |
 | `apps/desktop/renderer` | 粘贴链接、任务看板、素材预览、账号卡片、代理/AI 设置 |
 | `packages/core/src/processor` | 独立 FFmpeg 调用、进度与超时、变速/裁剪/重采样/元数据清理 |
-| `packages/core/src/rewriter` | OpenAI 兼容 BaseURL/模型、平台提示词、输出 schema、文案落盘 |
+| `packages/core/src/rewriter` | **已实现**：兼容 BaseURL/模型、平台提示词、输出 schema、逐平台原子落盘 |
 | `packages/core/src/publisher` | 协调器、每平台 Playwright 适配器、人工接管、发布回执 |
 | `resources/bin/<platform>-<arch>` | 可执行依赖，必须在 Electron extraResources 中解包部署 |
 | `resources/browser` | 后续由构建流程准备 Playwright 浏览器；不用终端用户手动安装 |
@@ -48,7 +50,7 @@ DownloadScheduler → Fetcher
 │  ├─ assets/
 │  └─ locks/
 ├─ processed/<source-id>/<revision>/     后续媒体衍生物
-├─ rewrites/<source-id>/<revision>/      后续每平台文案与标签
+├─ rewrites/<source-id>/<revision>/      后续可扩展文案版本历史；本轮在 downloads/assets/<id>/rewritten.json
 ├─ browser-profiles/<platform>/<account-id>/
 │                                        每账号独立 userDataDir
 └─ publications/<job-id>/                发布状态、回执、必要的诊断截图
@@ -67,9 +69,9 @@ DownloadScheduler → Fetcher
 ## 增量里程碑
 
 1. **已交付 Fetcher**：便携工具、代理、独立元数据/媒体队列、手动绑定 MP4、可靠落盘、CLI 和测试。
-2. **Processor**：在自制测试片上验证 1.02× 音视频同步、1% 裁剪（明确按总尺寸还是单边定义）、音频重采样和元数据删除，不覆盖下载资产。
-3. **最小桌面面板**：下载/处理队列，取消重试、代理设置、打开素材目录，接入现有类型化事件。
-4. **AIRewriter**：自定义 BaseURL/模型、平台结构化提示词、超时重试，生成结果先原子落盘。
+2. **已交付 AIRewriter**：独立读取已提交 info JSON，四平台 Prompt、自定义 API/模型、超时取消、逐平台原子写 `assets/<id>/rewritten.json`，无隐式付费重试。
+3. **Processor**：在自制测试片上验证 1.02× 音视频同步、1% 裁剪（明确按总尺寸还是单边定义）、音频重采样和元数据删除，不覆盖下载资产。
+4. **最小桌面面板**：下载/处理队列，取消重试、代理设置、打开素材目录，接入现有类型化事件。
 5. **单平台 Publisher**：先完成一个创作者中心的登录、上传、填表、人工验证与结果确认，再扩展平台。
 
 轻量编辑不保证规避平台重复内容检测；素材权利、内容价值和平台规则仍是发布前提。

@@ -1,0 +1,30 @@
+{
+  "name": "@omnipost/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev --watch",
+    "build": "npm run check && electron-vite build",
+    "check": "tsc --noEmit",
+    "preview": "electron-vite preview",
+    "postinstall": "install-electron",
+    "predev": "install-electron"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "lucide-react": "^0.468.0"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-vite": "^5.0.0",
+    "vite": "^7.3.0",
+    "@vitejs/plugin-react": "^5.1.0",
+    "tailwindcss": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0"
+  }
+}
