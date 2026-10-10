@@ -5,7 +5,7 @@ import { lstat, readFile } from 'node:fs/promises';
 
 import { AIRewriter } from '../../../../packages/core/src/rewriter/rewriter.js';
 
-import { resolveRewriteOptions } from '../../../../packages/core/src/rewriter/client.js';
+import { resolveRewriteOptions, fetchModels, validateHeaders } from '../../../../packages/core/src/rewriter/client.js';
 
 import { validatePlatform } from '../../../../packages/core/src/rewriter/prompts.js';
 
@@ -25,9 +25,10 @@ import { DesktopError, text } from './security.js';
 
 export class StudioService {
 
-  private settings: StudioSettings = { ai: { baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-chat', temperature: 0.7, jsonMode: true, hasApiKey: false, persisted: true }, processor: { ...DEFAULT_PROCESSING } };
+  private settings: StudioSettings = { ai: { protocol: 'openai', systemPrompt: '', hasCustomHeaders: false, baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-chat', temperature: 0.7, jsonMode: true, hasApiKey: false, persisted: true }, processor: { ...DEFAULT_PROCESSING } };
 
   private apiKey = '';
+  private headers: Record<string, string> = {};
 
   private readonly jobs = new Map<string, AbortController>();
 
@@ -60,7 +61,11 @@ export class StudioService {
 
     const apiKey = typeof ai.apiKey === 'string' ? ai.apiKey : this.apiKey;
 
-    const validated = { baseURL: ai.baseURL.trim(), model: ai.model.trim(), temperature: ai.temperature, jsonMode: ai.jsonMode };
+    const protocol = ai.protocol ?? 'openai';
+    if (protocol !== 'openai' && protocol !== 'anthropic') throw new DesktopError('INVALID_SETTINGS', '未知 AI 协议。');
+    const systemPrompt = ai.systemPrompt === undefined || ai.systemPrompt === '' ? '' : text(ai.systemPrompt, 16000);
+    const headers = ai.headers === undefined ? undefined : validateHeaders(ai.headers);
+    const validated = { protocol: protocol as 'openai' | 'anthropic', systemPrompt, ...(headers === undefined ? {} : { headers }), baseURL: ai.baseURL.trim(), model: ai.model.trim(), temperature: ai.temperature, jsonMode: ai.jsonMode };
 
     // Allow saving an unconfigured official provider; actual generation still requires a real key.
 
@@ -90,9 +95,11 @@ export class StudioService {
 
       if (typeof saved.encryptedKey === 'string' && safeStorage.isEncryptionAvailable()) key = safeStorage.decryptString(Buffer.from(saved.encryptedKey, 'base64'));
 
-      this.apiKey = key;
-
-      this.settings = { ai: { ...next.ai, hasApiKey: Boolean(key), persisted: true }, processor: next.processor };
+      const headers = typeof saved.encryptedHeaders === 'string' && safeStorage.isEncryptionAvailable()
+        ? validateHeaders(JSON.parse(safeStorage.decryptString(Buffer.from(saved.encryptedHeaders, 'base64')))) : {};
+      const { apiKey: _key, headers: _headers, ...ai } = next.ai;
+      this.settings = { ai: { ...ai, protocol: ai.protocol ?? 'openai', systemPrompt: ai.systemPrompt ?? '', hasCustomHeaders: Boolean(Object.keys(headers).length), hasApiKey: Boolean(key), persisted: true }, processor: next.processor };
+      this.apiKey = key; this.headers = headers;
 
     } catch { /* Fail closed: never expose unreadable credentials or echo raw settings. */ }
 
@@ -104,18 +111,24 @@ export class StudioService {
     const sameOrigin = new URL(next.ai.baseURL).origin === new URL(this.settings.ai.baseURL).origin;
     const key = next.ai.apiKey ?? (sameOrigin ? this.apiKey : '');
 
-    const persisted = !key || safeStorage.isEncryptionAvailable();
+    const headers = next.ai.headers ?? (sameOrigin ? this.headers : {});
+    const persisted = (!key && !Object.keys(headers).length) || safeStorage.isEncryptionAvailable();
 
-    const { apiKey: _key, ...ai } = next.ai;
+    const { apiKey: _key, headers: _headers, ...ai } = next.ai;
 
-    await atomicJson(this.file, { schemaVersion: 1, ai, processor: next.processor, ...(key && persisted ? { encryptedKey: safeStorage.encryptString(key).toString('base64') } : {}) });
+    await atomicJson(this.file, { schemaVersion: 1, ai, processor: next.processor, ...(Object.keys(headers).length && persisted ? { encryptedHeaders: safeStorage.encryptString(JSON.stringify(headers)).toString('base64') } : {}), ...(key && persisted ? { encryptedKey: safeStorage.encryptString(key).toString('base64') } : {}) });
 
-    this.apiKey = key; this.settings = { ai: { ...ai, hasApiKey: Boolean(key), persisted }, processor: next.processor };
+    this.apiKey = key; this.headers = headers; this.settings = { ai: { ...ai, protocol: ai.protocol ?? 'openai', systemPrompt: ai.systemPrompt ?? '', hasCustomHeaders: Boolean(Object.keys(headers).length), hasApiKey: Boolean(key), persisted }, processor: next.processor };
 
     return this.publicSettings();
 
   }
 
+  async models(input: unknown): Promise<string[]> {
+    const next = this.validate({ ai: input, processor: this.settings.processor }).ai;
+    const sameOrigin = new URL(next.baseURL).origin === new URL(this.settings.ai.baseURL).origin;
+    return this.job('settings', 'rewrite', signal => fetchModels({ ...next, apiKey: next.apiKey ?? (sameOrigin ? this.apiKey : ''), headers: next.headers ?? (sameOrigin ? this.headers : {}), signal }));
+  }
   async library(task: DownloadTask): Promise<TaskLibrary> {
     const existing = this.libraryReads.get(task.id); if (existing) return existing;
     const pending = this.readLibrary(task); this.libraryReads.set(task.id, pending);
@@ -157,7 +170,7 @@ export class StudioService {
 
     if (!manifest) throw new DesktopError('ASSET_NOT_READY', '请先解析链接。');
 
-    const options = { ...this.settings.ai, apiKey: this.apiKey };
+    const options = { ...this.settings.ai, apiKey: this.apiKey, headers: this.headers };
 
     return this.job(task.id, 'rewrite', signal => this.writer.rewriteMultiPlatform(manifest, input as TargetPlatform[], { ...options, signal }));
 

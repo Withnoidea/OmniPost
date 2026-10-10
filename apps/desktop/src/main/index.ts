@@ -1,3 +1,7 @@
+import { VerificationService } from './verification.js';
+import { PublisherService, PublisherError } from '../../../../packages/core/src/publisher/publisher.js';
+import { validatePlatform } from '../../../../packages/core/src/rewriter/prompts.js';
+import { validateManual } from '../../../../packages/core/src/fetcher/manual.js';
 import { StudioService } from './studio.js';
 import { RewriterError } from '../../../../packages/core/src/rewriter/errors.js';
 import { ProcessorError } from '../../../../packages/core/src/processor/types.js';
@@ -28,9 +32,14 @@ let window: BrowserWindow | null = null;
 let scheduler: DownloadScheduler | undefined;
 let startupError: unknown;
 let quitting = false;
+let shutdownFinished = false;
 const studio = new StudioService(dataDirectory, path.join(app.getPath('userData'), 'studio-settings.json'), tools, event => {
   if (window && !window.isDestroyed()) window.webContents.send('omni:studio', event);
 });
+const verification = new VerificationService(dataDirectory);
+const publisher = new PublisherService({ dataDirectory, onAccount: account => {
+  if (window && !window.isDestroyed()) window.webContents.send('omni:account', account);
+} });
 const probes = new Set<AbortController>();
 const sizeCache = new Map<string, { width: number | null; height: number | null }>();
 const devURL = process.env.ELECTRON_RENDERER_URL;
@@ -53,10 +62,11 @@ function authorized(event: IpcMainInvokeEvent): boolean {
 function handle<T>(channel: string, action: (...args: unknown[]) => Promise<T> | T): void {
   ipcMain.handle(channel, async (event, ...args: unknown[]): Promise<Reply<T>> => {
     try {
+      if (quitting) throw new DesktopError('CLOSING', '应用正在退出，请等待本地任务保存。');
       if (!authorized(event)) throw new DesktopError('FORBIDDEN', '不允许的窗口请求。');
       return { ok: true, value: await action(...args) };
     } catch (error) {
-      const known = error instanceof DesktopError || error instanceof FetcherError || error instanceof RewriterError || error instanceof ProcessorError;
+      const known = error instanceof PublisherError || error instanceof DesktopError || error instanceof FetcherError || error instanceof RewriterError || error instanceof ProcessorError;
       return { ok: false, error: { code: known ? error.code : 'DESKTOP_ERROR', message: known ? error.message : '本地操作失败，请检查文件权限后重试。' } };
     }
   });
@@ -131,6 +141,43 @@ async function attach(id: unknown, input: unknown): Promise<DownloadTask> {
   return engine().attachLocalMedia(task.id, file);
 }
 function registerIPC(): void {
+  handle('omni:models', input => studio.models(input));
+  handle('omni:verify-open', id => verification.open(getTask(id)));
+  handle('omni:verify-finish', async id => {
+    const task = getTask(id); await verification.finish(task);
+    const next = await engine().retry(task.id, { proxy: proxy.enabled ? proxy.url : '' });
+    return engine().waitFor(next.id);
+  });
+  handle('omni:manual', async input => {
+    const value = validateManual(input);
+    if (isRecord(input) && input.sourceTaskId !== undefined) {
+      const previous = getTask(input.sourceTaskId);
+      if (['queued', 'attaching', 'fetching_metadata', 'downloading', 'finalizing'].includes(previous.state)) throw new DesktopError('BUSY', '请等待当前素材操作完成。');
+      const manifest = previous.asset ?? previous.metadataAsset;
+      const directory = engine().getAssetDirectory(previous.id);
+      if (!value.videoPath && previous.asset) value.videoPath = await assetPath(directory, previous.asset.video.file);
+      if (!value.coverPath && manifest && /\.(png|jpe?g)$/i.test(manifest.thumbnail.file)) value.coverPath = await assetPath(directory, manifest.thumbnail.file);
+      if (previous.sourceUrl) value.sourceUrl = previous.sourceUrl;
+    }
+    return engine().createManual(value);
+  });
+  handle('omni:choose-media', async kind => {
+    if (kind !== 'video' && kind !== 'cover') throw new DesktopError('INVALID_INPUT', '未知文件类型。');
+    const result = await dialog.showOpenDialog(window!, { title: kind === 'video' ? '选择本地视频' : '选择本地封面', properties: ['openFile'], filters: [{ name: kind === 'video' ? 'MP4 视频' : '封面图片', extensions: kind === 'video' ? ['mp4'] : ['jpg', 'jpeg', 'png'] }] });
+    const file = result.filePaths[0]; return result.canceled || !file ? null : { path: file, name: path.basename(file) };
+  });
+  handle('omni:accounts', () => publisher.list());
+  handle('omni:connect-platform', platform => { validatePlatform(platform); return publisher.connect(platform); });
+  handle('omni:close-platform', platform => { validatePlatform(platform); return publisher.closePlatform(platform); });
+  handle('omni:publish', async (id, platform) => {
+    validatePlatform(platform); const task = getTask(id);
+    if (!task.asset || !['READY', 'completed'].includes(task.state)) throw new DesktopError('ASSET_NOT_READY', '请先挂载视频，使素材进入 READY 状态。');
+    const library = await studio.library(task);
+    if (library.active.length) throw new DesktopError('BUSY', '请等待文案或视频处理完成。');
+    const copy = library.rewritten?.platforms[platform];
+    if (!copy || !library.processed) throw new DesktopError('PUBLISH_NOT_READY', '请先生成该平台文案，并完成 FFmpeg 视频处理。');
+    return publisher.publish({ platform, copy, videoPath: await assetPath(engine().getAssetDirectory(task.id), library.processed.video.file) });
+  });
   handle('omni:studio-settings', () => studio.publicSettings());
   handle('omni:save-studio-settings', input => studio.save(input));
   handle('omni:library', id => studio.library(getTask(id)));
@@ -173,7 +220,7 @@ function createWindow(): void {
   window.webContents.on('will-navigate', (event) => event.preventDefault());
   window.webContents.on('will-attach-webview', (event) => event.preventDefault());
   window.once('ready-to-show', () => window?.show());
-  window.on('closed', () => { window = null; });
+  window.on('closed', () => { window = null; if (!quitting) app.quit(); });
   if (devURL) void window.loadURL(devURL); else void window.loadFile(rendererFile);
 }
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -186,18 +233,20 @@ else {
     await mkdir(app.getPath('userData'), { recursive: true });
     await loadProxy();
     await studio.load();
+    await publisher.load();
     try {
       scheduler = await DownloadScheduler.create({ dataDirectory, tools, metadataTimeoutMs: 20000,
         onEvent: (event) => { if (event.type !== 'progress' && window && !window.isDestroyed()) window.webContents.send('omni:task', { kind: event.type, task: event.task }); } });
     } catch (error) { startupError = error; }
     registerIPC(); createWindow();
   }).catch(() => { dialog.showErrorBox('OmniPost 启动失败', '无法创建本地应用目录，请检查目录权限。'); app.quit(); });
-  app.on('window-all-closed', () => app.quit());
+  app.on('window-all-closed', () => { if (!quitting) app.quit(); });
   app.on('before-quit', (event) => {
-    if (quitting) return;
+    if (shutdownFinished) return;
     event.preventDefault();
+    if (quitting) return;
     quitting = true;
     for (const probe of probes) probe.abort();
-    void Promise.allSettled([studio.close(), scheduler?.close() ?? Promise.resolve()]).finally(() => app.quit());
+    void Promise.allSettled([verification.close(), publisher.close(), studio.close(), scheduler?.close() ?? Promise.resolve()]).finally(() => { shutdownFinished = true; app.quit(); });
   });
 }

@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('.', import.meta.url));
 export default defineConfig({
-  main: { build: { rollupOptions: { input: `${root}src/main/index.ts` } } },
+  main: { build: { rollupOptions: { external: ['playwright'], input: `${root}src/main/index.ts` } } },
   preload: { build: { rollupOptions: { input: `${root}src/preload/index.ts`, output: { format: 'cjs', entryFileNames: 'index.cjs' } } } },
   renderer: {
     root: `${root}src/renderer`, plugins: [react(), tailwindcss()],

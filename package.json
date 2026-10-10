@@ -19,7 +19,8 @@
     "desktop:build": "npm run build --workspace @omnipost/desktop",
     "desktop:check": "npm run check --workspace @omnipost/desktop",
     "desktop:test": "node --experimental-strip-types --test apps/desktop/tests/*.test.mjs",
-    "typecheck": "npm run check && npm run desktop:check"
+    "typecheck": "npm run check && npm run desktop:check",
+    "setup:browser": "playwright install chromium"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
@@ -27,5 +28,8 @@
   },
   "workspaces": [
     "apps/desktop"
-  ]
+  ],
+  "dependencies": {
+    "playwright": "^1.64.0"
+  }
 }

@@ -15,7 +15,11 @@ export interface SourceText {
   title: string; description: string; tags: string[]; language: string | null;
   subtitleLanguages: string[]; automaticCaptionLanguages: string[]; subtitleText: string;
 }
+export type AIProtocol = 'openai' | 'anthropic';
 export interface RewriteOptions {
+  protocol?: AIProtocol;
+  headers?: Record<string, string>;
+  systemPrompt?: string;
   apiKey?: string;
   /** API root, including /v1 if needed; never include /chat/completions. */
   baseURL?: string;

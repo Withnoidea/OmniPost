@@ -1,4 +1,4 @@
-export type Platform = 'youtube' | 'tiktok';
+export type Platform = 'youtube' | 'tiktok' | 'local';
 export type TaskMode = 'download' | 'metadata';
 export type TaskState = 'queued' | 'downloading' | 'finalizing' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'fetching_metadata' | 'attaching' | 'AWAITING_MEDIA' | 'READY';
 export type ErrorCode =
@@ -95,4 +95,10 @@ export interface SchedulerOptions extends DownloadCallbacks {
   metadataTimeoutMs?: number;
   socketTimeoutSeconds?: number;
   retries?: number;
+}
+
+/** A manual revision creates a new immutable asset; existing tasks are never overwritten. */
+export interface ManualInput {
+  title: string; description: string; tags: string[]; author: string;
+  sourceUrl?: string; videoPath?: string; coverPath?: string;
 }

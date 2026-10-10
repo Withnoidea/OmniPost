@@ -1,77 +1,72 @@
-> 当前完整桌面实现与事务细节见 [desktop.md](desktop.md)、[processor.md](processor.md) 和 [交付记录](../OVERNIGHT_PROGRESS.md)。下文早期路线图中的桌面、AI、Processor 阶段均已交付；Publisher 仍未实现。
+# OmniPost 模块边界与运行架构
 
-# 架构与渐进交付
-
-## 边界
+## 已实现的数据流
 
 ```text
-Electron 主进程 / 后续独立 worker
-          │ 类型化 IPC（白名单命令/事件）
-          ▼
-DownloadScheduler → Fetcher
-                      ├─ fetchMetadata → metadata + cover [AWAITING_MEDIA]
-                      │                        ├─ AIRewriter → text JSON
-                      │                        └─ attachLocalMedia → asset [READY]
-                      └─ enqueue → full asset [completed，兼容旧流程]
-                                          │
-                                          └─ Processor → processed asset
-                                                              │
-                                              text JSON ──────┤
-                                                              ▼
-                                                   Publisher → receipts
+Electron renderer → context-isolated preload → authorized main IPC
+  ├─ fetchMetadata → metadata + cover [AWAITING_MEDIA]
+  │     ├─ AUTH_REQUIRED → isolated VerificationService → scoped cookies → new retry
+  │     └─ attachLocalMedia → validated asset [READY]
+  ├─ createManual → manual metadata + optional video / cover
+  │     ├─ no video → AWAITING_MEDIA
+  │     └─ verified MP4 → READY
+  ├─ AIRewriter → four-platform rewritten.json (metadata sufficient)
+  ├─ Processor → validated processed document + new MP4 (video required)
+  └─ PublisherService → persistent creator portal → upload / prefill → HUMAN confirmation
 ```
 
-- 渲染进程采用 React + TailwindCSS + Lucide，默认暗色。Node integration 关闭，context isolation 开启。上述 UI/IPC 尚未实现。
-- 本轮核心不依赖 Electron，可通过 CLI 与离线 fixture 独立验收。
-- 耗时/网络任务不得阻塞 renderer；前端仅订阅结构化状态，不解析子进程原始输出。
-- `assets/<id>` 可以先只有元数据/封面：AIRewriter 可消费 `metadata.manifest.json`，不等待视频。Processor/Publisher 必须读取完整 `manifest.json`，不能根据目录存在推断媒体就绪。每个后续阶段拥有自己的输出和日志，发布失败不能删除输入。
+- React + TailwindCSS + Lucide 使用集中式暖白 / Zinc token；默认日间，偏好本地持久化。
+- renderer 无 Node、文件系统与任意 IPC 权限。每条 IPC 校验窗口、主 frame、来源和输入；远端验证页面没有 preload。
+- 耗时任务不阻塞 renderer，状态来自结构化事件。服务错误脱敏，不向 UI 传原始 stderr、密钥或 Cookie。
+- `assets/<id>` 目录存在不代表视频就绪。AI 可使用 metadata manifest；Processor 必须读取完整媒体 manifest；发布要求 READY/兼容 completed、目标平台已保存文案和校验过的加工成品。
+- 手动补全采用不可变版本：创建新任务，继承旧素材的可信媒体路径并复制；不修改旧 manifest、文案或成品。视频通过文件句柄复制、源文件变化检查、ffprobe 与 SHA-256 校验。
 
-## 未来目录职责（不创建空代码）
+## 模块职责
 
-| 目录 | 责任 |
+| 模块 | 责任 |
 |---|---|
-| `apps/desktop/electron` | 应用生命周期、IPC、系统托盘、配置和凭据保管、资源路径 |
-| `apps/desktop/renderer` | 粘贴链接、任务看板、素材预览、账号卡片、代理/AI 设置 |
-| `packages/core/src/processor` | 独立 FFmpeg 调用、进度与超时、变速/裁剪/重采样/元数据清理 |
-| `packages/core/src/rewriter` | **已实现**：兼容 BaseURL/模型、平台提示词、输出 schema、逐平台原子落盘 |
-| `packages/core/src/publisher` | 协调器、每平台 Playwright 适配器、人工接管、发布回执 |
-| `resources/bin/<platform>-<arch>` | 可执行依赖，必须在 Electron extraResources 中解包部署 |
-| `resources/browser` | 后续由构建流程准备 Playwright 浏览器；不用终端用户手动安装 |
-| `resources/stealth` | 后续审查后放置浏览器初始化脚本；不等同于验证码绕过 |
+| `apps/desktop/src/main/index.ts` | 生命周期、授权 IPC、文件选择与服务编排 |
+| `apps/desktop/src/main/studio.ts` | AI / FFmpeg 调度、加密设置、模型查询、文案编辑 |
+| `apps/desktop/src/main/verification.ts` | 临时隔离验证窗口、域名限制、Cookie 保存 |
+| `apps/desktop/src/preload` / `shared` | 最小权限类型化 API 与 Reply / event 契约 |
+| `packages/core/src/fetcher` | 下载/元数据/手动队列、持久化、Cookie、媒体校验 |
+| `packages/core/src/rewriter` | OpenAI / Anthropic 请求、模型查询、schema、逐平台原子保存 |
+| `packages/core/src/processor` | FFmpeg 变速、裁剪、重采样、元数据清理与输出事务 |
+| `packages/core/src/publisher` | 四平台配置矩阵、独立持久化浏览器、登录验证与上传预填 |
 
-## 运行数据（规划）
+Fetcher、Rewriter、Processor 与 Publisher 不依赖 Electron，可通过离线 fixture / injected transport / launcher 单独验收。平台差异集中在 `publisher/platforms.ts`，浏览器生命周期与人工接管逻辑集中在 `publisher/publisher.ts`。
+
+## 数据目录
+
+开发默认 `.omnipost/`，打包后为 `<userData>/library/`；可通过 `OMNIPOST_DATA_DIR` 指向隔离 QA 库。
 
 ```text
-<userData>/
-├─ config/                              非敏感设置；密钥使用系统安全存储
-├─ downloads/                           本轮 dataDirectory
-│  ├─ jobs/
-│  ├─ work/
-│  ├─ assets/
-│  └─ locks/
-├─ processed/<source-id>/<revision>/     后续媒体衍生物
-├─ rewrites/<source-id>/<revision>/      后续可扩展文案版本历史；本轮在 downloads/assets/<id>/rewritten.json
-├─ browser-profiles/<platform>/<account-id>/
-│                                        每账号独立 userDataDir
-└─ publications/<job-id>/                发布状态、回执、必要的诊断截图
+<library>/
+├─ jobs/                          持久化任务，不含 Cookie
+├─ work/                          未提交 / 失败尝试，不覆盖已提交资产
+├─ locks/                         调度器独占锁
+├─ assets/<task-id>/               媒体、封面、metadata / media manifests
+│  ├─ rewritten.json              四平台已保存文案
+│  └─ processed/                  衍生成品及处理凭据
+├─ cookies/{youtube,tiktok}.txt    明文 Netscape Cookie，仅供相应 fetcher 使用
+├─ cookies/request-<uuid>.txt      单次下载 Cookie 副本，结束时清理
+└─ profiles/
+   ├─ accounts.json               上次验证状态，不含 Cookie
+   └─ {douyin,bilibili,kuaishou,xiaohongshu}/
+                                  每平台独立 Chromium userDataDir
 ```
 
-账号采用内部 UUID，不将昵称直接用作路径。不同平台/账号不得复用 Cookie、LocalStorage 或浏览器用户目录。登录有效期由平台决定，不能保证扫码永久有效。
+桌面设置在 Electron userData（开发时 `<library>/.desktop/`）。API Key / 自定义 Headers / 代理凭据使用 safeStorage；不可用时仅保存在内存。Cookie 与浏览器 profile 本身不受此加密承诺保护，必须按敏感会话数据管理。当前每个平台一个账号目录，不宣称支持同平台多账号。
 
-## 分发红线（后续实现时遵循）
+## 安全与人工接管边界
 
-- 只使用 Playwright 驱动官方创作者中心真实网页，不实现逆向签名 HTTP 上传接口。
-- 上传、等待处理、填文案、话题、封面、提交分别具有超时与明确事件；视频上传 100% 不等于发布成功。
-- 滑块/短信/登录验证通过 `onCaptcha` 等专属事件暂停并显式请求用户；浏览器置前后由用户完成，确认状态恢复后才继续。
-- 本轮 `onError(AUTH_REQUIRED)` 是下载源站访问受限，不冒充发布 HITL，也不会开浏览器假装已经接管。
-- 适配器细节逐个平台验收；提交前给予用户内容与目标账号确认，避免重复发布。发布回执与素材生命周期分离。
+- 源站验证只允许 HTTPS 平台域名，禁止子窗口、下载、Node、权限请求；用户亲自完成挑战并回到工作台确认保存。Cookie 按域名、有效期与格式过滤，下载每次独立快照，不泄露到素材/事件。
+- AI 的旧凭据不会隐式发往新 origin；模型请求同样检查。自定义 Headers 禁止覆盖路由、认证与传输控制头。System Prompt 微调保留输出 schema 约束。
+- 平台扫码登录必须同时满足有效会话 Cookie 与已登录 DOM 标记；磁盘目录或旧状态不代表当前登录有效。发布前重新检查，登录超时/关闭有明确错误。
+- 只操作官方创作者页面及受信任 frame；离站页面不注入视频或文案。同平台互斥，不同平台独立；关闭应用等待浏览器与进行中的操作退出。
+- **没有最终发布点击**。上传预填不等于上传完成或发布成功；话题绑定、封面、分区、版权声明和最终提交均由本人检查。页面改版时显示手动兜底，不猜测提交按钮。
+- 不实现逆向签名上传接口、验证码破解、DRM/付费限制绕过或反检测脚本。素材权利与平台规则仍是前提；轻量加工不保证规避重复内容检测。
 
-## 增量里程碑
+## 验收与后续工作
 
-1. **已交付 Fetcher**：便携工具、代理、独立元数据/媒体队列、手动绑定 MP4、可靠落盘、CLI 和测试。
-2. **已交付 AIRewriter**：独立读取已提交 info JSON，四平台 Prompt、自定义 API/模型、超时取消、逐平台原子写 `assets/<id>/rewritten.json`，无隐式付费重试。
-3. **Processor**：在自制测试片上验证 1.02× 音视频同步、1% 裁剪（明确按总尺寸还是单边定义）、音频重采样和元数据删除，不覆盖下载资产。
-4. **最小桌面面板**：下载/处理队列，取消重试、代理设置、打开素材目录，接入现有类型化事件。
-5. **单平台 Publisher**：先完成一个创作者中心的登录、上传、填表、人工验证与结果确认，再扩展平台。
-
-轻量编辑不保证规避平台重复内容检测；素材权利、内容价值和平台规则仍是发布前提。
+离线测试验证协议、生命周期、凭据隔离、手动素材恢复与四平台 mock 预填（禁止最终提交）；真实本地 FFmpeg 验证加工输出。桌面 QA 使用独立数据目录。四个平台的真实账号登录及完整线上预填仍需逐平台人工验收，选择器应随官方页面调整维护。安装与操作说明见 [upgrades.md](upgrades.md)。

@@ -50,15 +50,18 @@ Node >=22.12，Electron 44 / electron-vite 5 / Vite 7。开发端口固定 127.0
 4. **人工编辑**：标题、正文、标签、钩子或分区可微调。点击「保存微调」校验格式并携带 `updatedAt` 防止覆盖另一版本。未保存草稿切 Tab/Studio/Analytics 不丢失，但关闭窗口或刷新会丢失，务必显式保存。有草稿时禁止重新生成。复制会复制当前可见文案（包括未保存微调）。
 5. **FFmpeg**：挂载后即可开启，独立于 AI。真实 stderr `out_time_us` 驱动进度；完成后 `PROCESSED_READY`，可重新处理，原片保留。详细输出事务和元数据边界见 [processor.md](processor.md)。
 6. **监控**：只统计本地任务与 `.operations/*.json`。任务指标显示视频就绪数 / 全部任务、已转码数；流量是每个任务最终挂载/下载视频的字节数，不含代理重试、元数据或派生视频；重复绑定到不同任务分别计数。AI 次数为发起的尝试，Token 仅使用服务返回值，不估算费用；平均处理时长取成功流水线。历史未记录操作不会被反向推算。趋势以 UTC 日期分桶，平台分布是成功保存次数，不是已发布数量。
-7. **发布**：四个平台明确显示「待配置账号 / Pending Profile」，发布数/播放量均为 `—`。没有虚构账号、平台流量或可用的发布按钮。
+7. **发布**：监控中心可连接四平台账号，独立 Chromium 窗口扫码登录，Cookie 与页面状态共同验证后自动关闭。READY 素材需先保存目标平台文案并完成 FFmpeg 加工，再点击「发布到平台」上传预填。浏览器保留供本人核对和最终提交；发布数/播放量仍为 `—`，不把预填计作发布成功。详见 [升级指南](upgrades.md)。
+8. **解析兜底**：AUTH_REQUIRED 显示人工验证入口；所有解析失败或无链接场景均可手动录入/补全。支持标题、简介、Tags、作者及 MP4 / JPG / PNG 拖入；成功后进入 READY 或等待视频状态。补全另存为新任务。
 
 ## IPC
 
 `window.electronAPI` 暴露：
 
 - Fetcher：`snapshot / fetchMetadata / selectAndAttach / attachDroppedFile / assets / cancel / onTask`
+- 手动与验证：`createManual / chooseMedia / droppedMedia / openVerification / finishVerification`
+- 发布：`accounts / connectPlatform / closePlatform / publish / onAccount`
 - Studio：`library / rewrite / saveCopy / processMedia / cancelStudio / onStudio`
-- 配置：`studioSettings / saveStudioSettings / setProxy`
+- 配置：`studioSettings / saveStudioSettings / fetchModels / setProxy`
 - 监控与窗口：`analytics / openAssets / copyText / windowControl`
 
 完整类型位于 `src/shared/contracts.ts`。返回 `{ok:true,value}` 或 `{ok:false,error:{code,message}}`；不返回原始 provider 错误、工具 stderr 或密码。
@@ -68,11 +71,12 @@ renderer 不可直接访问文件系统、Node、任意 IPC 或浏览器外跳�
 ## 设置与存储
 
 - 开发库 `.omnipost`，配置 `.omnipost/.desktop`；打包后 library 使用 userData。测试可显式设置 `OMNIPOST_DATA_DIR`，不会注入生产样例。
-- Key 与带凭据的代理使用 Electron safeStorage（Windows 系统加密）。若不可用，凭据只保留本次内存，不明文写盘，界面提示。
-- 模型支持 DeepSeek / OpenAI / Ollama 自定义 Base URL；本地 HTTP 仅允许 loopback，其他地址必须 HTTPS。不要包含 `/chat/completions`。修改服务 origin 默认清除旧 Key，避免向另一个服务发送它。
+- Key、自定义 Headers 与带凭据的代理使用 Electron safeStorage（Windows 系统加密）。若不可用，凭据只保留本次内存，不明文写盘，界面提示。
+- 模型支持 OpenAI 兼容 / Anthropic 原生协议及自定义 Base URL；本地 HTTP 仅允许 loopback，其他地址必须 HTTPS。填写 API 根而不是 `/chat/completions`、`/messages` 或 `/models`；无路径时补 `/v1`，已有自定义路径保留。修改服务 origin 默认清除旧 Key 和 Headers。模型列表失败仍可手填模型。
 - 代理只用于 Fetcher，不接管系统流量或 LLM。Pill 表示配置，不声称已测通。
 - Studio 设置和代理分别原子提交；若后一组失败，前一组已保存，不冒充跨文件全局事务。
-- 关闭窗口等待 Fetcher、LLM 与 FFmpeg 取消清理。并行素材读取在主进程合并，避免提交完成事件与页面刷新争夺处理锁。
+- 验证 Cookie 位于 `<library>/cookies/`（明文 Netscape 格式），平台登录状态位于 `<library>/profiles/{platform}/`；属于敏感文件，不要上传或共享。
+- 关闭窗口等待 Fetcher、LLM、FFmpeg、验证窗口与平台浏览器取消清理。并行素材读取在主进程合并，避免提交完成事件与页面刷新争夺处理锁。
 
 ## 验收
 

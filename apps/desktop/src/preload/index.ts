@@ -1,6 +1,21 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { DesktopEvent, ElectronAPI, StudioEvent } from '../shared/contracts.js';
+import type { DesktopEvent, ElectronAPI, StudioEvent, PlatformAccount } from '../shared/contracts.js';
 const api: ElectronAPI = {
+  createManual: input => ipcRenderer.invoke('omni:manual', input),
+  chooseMedia: kind => ipcRenderer.invoke('omni:choose-media', kind),
+  droppedMedia: file => ({ path: webUtils.getPathForFile(file), name: file.name }),
+  openVerification: id => ipcRenderer.invoke('omni:verify-open', id),
+  finishVerification: id => ipcRenderer.invoke('omni:verify-finish', id),
+  fetchModels: settings => ipcRenderer.invoke('omni:models', settings),
+  accounts: () => ipcRenderer.invoke('omni:accounts'),
+  connectPlatform: platform => ipcRenderer.invoke('omni:connect-platform', platform),
+  closePlatform: platform => ipcRenderer.invoke('omni:close-platform', platform),
+  publish: (id, platform) => ipcRenderer.invoke('omni:publish', id, platform),
+  onAccount: listener => {
+    const handler = (_event: Electron.IpcRendererEvent, account: PlatformAccount): void => listener(account);
+    ipcRenderer.on('omni:account', handler);
+    return () => { ipcRenderer.removeListener('omni:account', handler); };
+  },
   studioSettings: () => ipcRenderer.invoke('omni:studio-settings'),
   saveStudioSettings: settings => ipcRenderer.invoke('omni:save-studio-settings', settings),
   library: id => ipcRenderer.invoke('omni:library', id),

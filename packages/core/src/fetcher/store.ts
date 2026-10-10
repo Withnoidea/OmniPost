@@ -86,7 +86,7 @@ export class AssetStore {
       if (!name.endsWith('.json')) continue;
       const value = await readJson(path.join(this.root, 'jobs', name));
       if (!isRecord(value) || value.schemaVersion !== 1 || typeof value.id !== 'string' || !TASK_ID.test(value.id) || name !== `${value.id}.json`
-        || typeof value.sourceUrl !== 'string' || !['youtube', 'tiktok'].includes(String(value.platform))
+        || typeof value.sourceUrl !== 'string' || !['youtube', 'tiktok', 'local'].includes(String(value.platform))
         || !['queued', 'downloading', 'finalizing', 'completed', 'failed', 'cancelled', 'interrupted', 'fetching_metadata', 'attaching', 'AWAITING_MEDIA', 'READY'].includes(String(value.state))
         || (value.mode !== undefined && value.mode !== 'metadata' && value.mode !== 'download')
         || typeof value.createdAt !== 'string' || typeof value.updatedAt !== 'string') throw new FetcherError('PERSISTENCE_ERROR');

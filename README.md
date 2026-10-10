@@ -35,7 +35,7 @@ OmniPost 采用对齐 Claude Desktop 与 cc-switch 的精致桌面美学设计�
 ---
 
 ### 4. 统一设置面板 (Settings & Configuration)
-集成 LLM 模型服务配置（DeepSeek / OpenAI 兼容）、网络独立代理（HTTP/SOCKS5）、便携工具链检测及安全存储。
+集成 LLM 模型服务配置（OpenAI 兼容 / Anthropic 原生、模型列表与自定义 Headers）、网络独立代理（HTTP/SOCKS5）、便携工具链检测及安全存储。
 
 ![Settings Panel](docs/assets/settings.png)
 
@@ -51,12 +51,24 @@ OmniPost 采用对齐 Claude Desktop 与 cc-switch 的精致桌面美学设计�
 
 ---
 
+## 核心升级：失败可接管，发布可预填
+
+- **人工验证**：`AUTH_REQUIRED` 显示「需要人工验证」，打开隔离窗口由本人完成登录/验证，返回工作台保存 Cookie 并重试；不自动破解验证码。
+- **手动创作**：无需链接即可填写标题、简介、标签与作者，拖入 MP4 / JPG / PNG。校验后进入 `READY`；补全已有素材另存为新任务，不覆盖原任务。
+- **全能模型连接**：OpenAI 兼容与 Anthropic 原生协议、测试连接并获取模型、自定义模型、Headers 与 System Prompt。
+- **四平台发布助手**：独立 Chromium profile，扫码登录后检测并关闭登录窗口；读取已保存文案和加工成品，上传预填，保留窗口供本人最终确认。
+
+完整操作步骤、凭据存储与验收边界见 [核心升级指南](docs/upgrades.md)。
+
+---
+
 ## 🚀 快速启动（Windows x64）
 
 ### 启动桌面端 (Electron Studio)
 
 ```powershell
 npm install
+npm run setup:browser  # 首次使用平台登录/发布预填时安装 Chromium
 npm run dev
 ```
 
@@ -66,11 +78,12 @@ npm run dev
 
 | 命令 | 说明 |
 | :--- | :--- |
+| `npm run setup:browser` | 安装平台登录与发布预填所需 Chromium |
 | `npm run dev` | 启动桌面开发端（Electron + Vite HMR） |
 | `npm run desktop:build` | 桌面端 TypeScript 检查与打包构建 |
 | `npm run desktop:check` | 桌面端严格类型诊断 |
-| `npm run desktop:test` | 桌面端离线 IPC 与状态边界测试（10 tests） |
-| `npm test` | 核心引擎全量测试（Fetcher + Rewriter，离线通过） |
+| `npm run desktop:test` | 桌面端离线 IPC、主题、凭据及验证窗口测试 |
+| `npm test` | 核心引擎全量离线测试（Fetcher / Rewriter / Processor / Publisher） |
 | `npm run typecheck` | 整仓（Core + Desktop）全量严格类型核验 |
 
 ---
@@ -96,7 +109,7 @@ OmniPost/
 │  │  └─ scheduler.ts                   并发队列、超时、取消、重试、恢复
 │  ├─ processor/                        [已实现] 变速/裁剪/音轨/元数据清理
 │  ├─ rewriter/                         [已实现] 兼容 API、四平台 Prompt、逐平台落盘
-│  └─ publisher/                        [后续] Playwright 平台适配器/HITL
+│  └─ publisher/                        [已实现] 四平台独立 profile、扫码登录检测、发布预填/HITL
 ├─ resources/
 │  ├─ tools.lock.json                   固定版本、下载地址、SHA-256
 │  ├─ THIRD_PARTY_NOTICES.md             二进制依赖许可与再分发提醒
@@ -247,7 +260,7 @@ Electron 后续将使用 `app.getPath('userData')` 存数据，`process.resource
 
 **目录存在不代表视频就绪。** `AWAITING_MEDIA` 只可消费元数据；Processor/Publisher 必须检查 `READY` 或兼容的 `completed` 及完整 `manifest.json`。绑定通过带取消信号的流式复制、ffprobe（容器/视频流/正时长）与 SHA-256 校验，失败文件留在独立尝试目录，不破坏已提交封面与信息；不做逐帧完整解码或源链接内容匹配。
 
-下载阶段的合并/重封装**不是**去重转码。1.02× 变速、1% 裁剪、音轨重采样、清除元数据将在下一模块实现，输出到新的衍生资产目录，不改写原始资产。
+下载阶段的合并/重封装**不是**去重转码。Processor 已实现变速、裁剪、音轨重采样与元数据清理，输出到新的衍生资产，不改写原始资产，也不保证规避平台重复内容检测。
 
 ## AIRewriter：先改文案，再绑定视频
 
@@ -271,15 +284,15 @@ Remove-Item Env:OMNIPOST_LLM_API_KEY
 
 ## 验证与边界
 
-`npm test` 当前 60 项通过、0 跳过：原37项 Fetcher/便携工具测试保持通过，新增23项 Rewriter 离线 Mock/真实本地 HTTP/CLI 测试。覆盖改写 JSON 容错、逐平台保存、部分失败、并发锁、密钥隔离、超时取消与源信息变化保护。
+验收命令：`npm run typecheck`、`npm test`、`npm run desktop:test`、`npm run desktop:build`。离线测试覆盖手动素材到真实 FFmpeg 的完整链路、Cookie 隔离与重试、双协议请求、加密凭据、四平台登录/预填 mock、取消与恢复，以及永不点击最终发布的边界。
 
 集成测试使用自制音视频 + 本地认证 HTTP 代理，在 **PATH 清空** 的情况下执行真实 yt-dlp、FFmpeg 合流和 ffprobe，并核对原始封面字节；额外验证元数据模式 **零音视频请求**、真实 API/CLI 本地绑定；不需要外网。未准备便携工具时该项明确标记为 skipped，其余测试仍可运行。
 
 - 尚未用用户实际链接/代理验收 YouTube/TikTok 线上源站可用性，源站风控不等同于调度器故障。
-- 无封面、缺失视频流、元数据无效不会被标记成功。不能保证每个受限视频都可下载。
+- 抓取缺少必要封面/视频流或元数据无效不会被标记成功；手动创建允许占位封面，但视频仍需通过校验。不能保证每个受限视频都可下载。
 - 不提供 DRM、付费限制、登录或验证码绕过；遇到此类问题返回明确错误。无水印取决于源站提供的媒体，不做水印擦除承诺。
 - 源站提供多少语言信息就保留多少；本轮不做翻译、不额外下载字幕，不虚构多语言标题。
 - 原始 info JSON 可能含签名媒体 URL，应视为敏感本地文件。Windows 继承用户目录 ACL，POSIX 新建目录/日志使用 0700/0600。代理密码在工具运行时仍可能被同权限本机进程从进程参数读取，不能将环境变量用法理解为操作系统级秘密隔离。
-- 此轮没有 UI、Playwright 分发、账号隔离、stealth 或 HITL 空实现。AI 改写产物需人工审稿，并未接入自动发布。只下载你有权处理与发布的内容，并遵守平台条款。
+- 已接入桌面 UI、人工验证、四平台独立登录与发布预填。最终发布必须在平台页面人工确认；尚未使用真实账号完成线上四平台发布验收，选择器可能随平台改版而需要维护。只处理你有权发布的内容，并遵守平台条款。
 
 更多细节见 [下载模块契约](docs/fetcher.md) 和 [架构设计](docs/architecture.md)。

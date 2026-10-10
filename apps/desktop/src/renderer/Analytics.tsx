@@ -1,5 +1,6 @@
+import { AccountPanel } from './PlatformPanel.js';
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, ArrowUpRight, Clock3, Database, FileCheck2, Loader2, RefreshCw, Sparkles, UserRound } from 'lucide-react';
+import { Activity, Clock3, Database, FileCheck2, Loader2, RefreshCw, Sparkles } from 'lucide-react';
 import type { AnalyticsSnapshot, TargetPlatform } from '../shared/contracts.js';
 import { api, unwrap, errorMessage } from './bridge.js';
 import { bytes } from './model.js';
@@ -32,7 +33,7 @@ export function Analytics() {
         </svg><p className="chart-footnote">记录每一次素材任务，包含失败与取消；不代表平台播放量。</p></article>
         <article className="chart-card surface"><header><div><span className="eyebrow">PLATFORM MIX</span><h2>文案改写分布</h2></div><span className="chart-period">累计成功保存</span></header><div className="donut-content"><svg className="donut-chart" viewBox="0 0 180 180" role="img" aria-label={`累计成功改写 ${total} 次`}><circle cx="90" cy="90" r="63" fill="none" stroke="var(--border-subtle)" strokeWidth="17" />{(Object.keys(data.platforms) as TargetPlatform[]).map(p => { const portion = total ? data.platforms[p]/total : 0; const start = offset; offset += portion; return <circle key={p} cx="90" cy="90" r="63" pathLength="100" fill="none" stroke={colors[p]} strokeWidth="17" strokeDasharray={`${portion*100} ${100-portion*100}`} strokeDashoffset={-start*100} transform="rotate(-90 90 90)" />; })}<text x="90" y="89" textAnchor="middle" fill="var(--text-primary)" fontSize="28">{total}</text><text x="90" y="111" textAnchor="middle" fill="var(--text-secondary)" fontSize="10">已保存文案</text></svg><ul className="platform-legend">{(Object.keys(data.platforms) as TargetPlatform[]).map(p => <li key={p}><i style={{ background: colors[p] }} /><span>{platformNames[p]}</span><strong>{data.platforms[p]}</strong><small>{total ? Math.round(data.platforms[p]/total*100) : 0}%</small></li>)}</ul></div><p className="chart-footnote">实际改写次数（含再次生成），不是已发布数量。</p></article>
       </section>
-      <section className="account-section" aria-labelledby="accounts-heading"><div className="section-heading"><h2 id="accounts-heading">平台投放监控 <span>下一站</span></h2><span className="queue-caption">RPA 发布模块尚未接入</span></div><div className="account-grid">{(Object.keys(platformNames) as TargetPlatform[]).map(p => <article className="account-card surface" key={p}><header><span className={`platform-monogram ${p}`}>{p === 'bilibili' ? 'b' : p === 'xiaohongshu' ? '红' : p === 'douyin' ? '抖' : '快'}</span><h3>{platformNames[p]}</h3><ArrowUpRight size={13} /></header><p><i className="dot" />待配置账号</p><small>Pending Profile</small><footer><UserRound size={12} /><span>发布数 —</span><span>播放量 —</span></footer></article>)}</div></section>
+      <AccountPanel />
       <div className="analytics-disclosure"><Activity size={14} /><p>统计仅基于本地持久化记录。不估算模型未返回的 Token，不虚构平台流量。{data.incomplete > 0 ? ` 有 ${data.incomplete} 次操作仍在执行或意外中断。` : ''}{data.unreadableRecords > 0 ? ` ${data.unreadableRecords} 条记录无法读取，未计入统计。` : ''}</p></div>
     </>}
   </div>;

@@ -1,3 +1,5 @@
+import { CookieStore } from './cookies.js';
+import { prepareManual, validateManual } from './manual.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { integerOption, normalizeProxy, normalizeSource, validateTools } from './config.js';
@@ -10,6 +12,7 @@ import type { DownloadEvent, DownloadRequest, DownloadTask, MetadataOptions, Sch
 const terminal = (state: TaskState): boolean => ['completed', 'failed', 'cancelled', 'interrupted', 'AWAITING_MEDIA', 'READY'].includes(state);
 type PendingInput =
   | { kind: TaskMode; proxy: string; timeoutMs: number }
+  | { kind: 'manual'; input: import('./types.js').ManualInput; timeoutMs: number }
   | { kind: 'attachment'; localFilePath: string; timeoutMs: number };
 export class DownloadScheduler {
   private readonly store: AssetStore;
@@ -92,6 +95,20 @@ export class DownloadScheduler {
     const snapshot = structuredClone(task);
     this.pump();
     return snapshot;
+  }
+  createManual(input: unknown): Promise<DownloadTask> {
+    if (this.closed) return Promise.reject(new FetcherError('SCHEDULER_CLOSED'));
+    return this.trackEnqueue(this.addManual(input)).then(task => this.waitFor(task.id));
+  }
+  private async addManual(input: unknown): Promise<DownloadTask> {
+    const value = validateManual(input);
+    const source = value.sourceUrl ? normalizeSource(value.sourceUrl) : { url: '', platform: 'local' as const };
+    if (value.videoPath) await validateTools(this.options.tools, 'attachment');
+    const now = new Date().toISOString();
+    const task: DownloadTask = { schemaVersion: 1, id: randomUUID(), sourceUrl: source.url, platform: source.platform, mode: 'metadata', state: 'queued', createdAt: now, updatedAt: now };
+    await this.store.save(task); this.tasks.set(task.id, task);
+    this.inputs.set(task.id, { kind: 'manual', input: value, timeoutMs: this.timeoutMs });
+    this.emit({ type: 'state', task }); this.pump(); return structuredClone(task);
   }
   /** Copies a local MP4; the caller's file and previously committed metadata are never modified. */
   attachLocalMedia(id: string, localFilePath: string): Promise<DownloadTask> {
@@ -184,8 +201,20 @@ export class DownloadScheduler {
   private async execute(task: DownloadTask, input: PendingInput, controller: AbortController): Promise<void> {
     const timer = setTimeout(() => controller.abort(new FetcherError('TIMEOUT')), input.timeoutMs);
     let committed = false;
+    let cookieSnapshot: Awaited<ReturnType<CookieStore['snapshot']>>;
     try {
-      if (input.kind === 'attachment') {
+      if (input.kind === 'manual') {
+        await this.transition(task, 'attaching');
+        const directory = await this.store.createWorkspace(task.id);
+        const manifest = await prepareManual(task, input.input, directory, this.options.tools, this.runner, controller.signal);
+        throwIfAborted(controller.signal);
+        if ('video' in manifest) {
+          await this.store.commit(task.id, manifest); task.asset = manifest; task.state = 'READY';
+        } else {
+          await this.store.commitMetadata(task.id, manifest); task.metadataAsset = manifest; task.state = 'AWAITING_MEDIA';
+        }
+        committed = true; delete task.error;
+      } else if (input.kind === 'attachment') {
         await this.transition(task, 'attaching');
         const metadata = await this.store.committedMetadata(task.id);
         if (!metadata) throw new FetcherError('INVALID_OUTPUT');
@@ -200,9 +229,11 @@ export class DownloadScheduler {
         await this.transition(task, input.kind === 'metadata' ? 'fetching_metadata' : 'downloading');
         throwIfAborted(controller.signal);
         const directory = await this.store.createWorkspace(task.id);
+        cookieSnapshot = await new CookieStore(this.options.dataDirectory).snapshot(task.platform);
+        const cookieOptions = cookieSnapshot ? { cookieFile: cookieSnapshot.file } : {};
         if (input.kind === 'metadata') {
           await fetchMetadataIntoWorkspace(task, input.proxy, directory, {
-            tools: this.options.tools, socketTimeoutSeconds: Math.min(5, this.socketTimeoutSeconds), retries: 0,
+            ...cookieOptions, tools: this.options.tools, socketTimeoutSeconds: Math.min(5, this.socketTimeoutSeconds), retries: 0,
           }, this.runner, controller.signal);
           await this.transition(task, 'finalizing');
           const metadata = await prepareMetadataManifest(task, directory, controller.signal);
@@ -211,7 +242,7 @@ export class DownloadScheduler {
           committed = true; task.metadataAsset = metadata; task.state = 'AWAITING_MEDIA'; delete task.error;
         } else {
           const video = await downloadIntoWorkspace(task, input.proxy, directory, {
-            tools: this.options.tools, socketTimeoutSeconds: this.socketTimeoutSeconds, retries: this.retries,
+            ...cookieOptions, tools: this.options.tools, socketTimeoutSeconds: this.socketTimeoutSeconds, retries: this.retries,
           }, this.runner, controller.signal, (progress) => {
             task.progress = progress;
             this.emit({ type: 'progress', taskId: task.id, progress });
@@ -231,7 +262,8 @@ export class DownloadScheduler {
       task.error = failure.toJSON();
     } finally {
       clearTimeout(timer);
-      if (input.kind !== 'attachment') input.proxy = '';
+      await cookieSnapshot?.dispose();
+      if (input.kind === 'metadata' || input.kind === 'download') input.proxy = '';
       await this.finish(task, committed);
     }
   }

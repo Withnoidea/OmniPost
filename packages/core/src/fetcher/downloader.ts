@@ -12,9 +12,11 @@ export interface DownloaderOptions {
   tools: PortableTools;
   socketTimeoutSeconds: number;
   retries: number;
+  cookieFile?: string;
 }
 function commonArguments(proxy: string, options: DownloaderOptions): string[] {
   return [
+    ...(options.cookieFile ? ['--cookies', options.cookieFile] : []),
     '--ignore-config', '--no-cache-dir', '--no-playlist', '--no-color', '--newline', '--no-simulate',
     '--no-overwrites', '--no-post-overwrites',
     '--socket-timeout', String(options.socketTimeoutSeconds),

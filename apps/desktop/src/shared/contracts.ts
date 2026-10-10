@@ -1,12 +1,18 @@
+import type { ManualInput } from '../../../../packages/core/src/fetcher/types.js';
+import type { PlatformAccount, PublishResult } from '../../../../packages/core/src/publisher/publisher.js';
+export type { PlatformAccount, PublishResult };
+export interface ManualDraft extends ManualInput { sourceTaskId?: string }
+export interface MediaSelection { path: string; name: string }
+import type { AIProtocol } from '../../../../packages/core/src/rewriter/types.js';
 import type { RewrittenDocument, RewriteTaskResult, RewriteProgress, TargetPlatform, LocalizedCopy } from '../../../../packages/core/src/rewriter/types.js';
 import type { ProcessedDocument, ProcessingSettings, ProcessingProgress } from '../../../../packages/core/src/processor/types.js';
 import type { AnalyticsSnapshot } from '../../../../packages/core/src/telemetry.js';
 export type { RewrittenDocument, RewriteTaskResult, TargetPlatform, LocalizedCopy, ProcessedDocument, ProcessingSettings, AnalyticsSnapshot };
 export interface StudioSettings {
-  ai: { baseURL: string; model: string; temperature: number; jsonMode: boolean; hasApiKey: boolean; persisted: boolean };
+  ai: { protocol: AIProtocol; systemPrompt: string; hasCustomHeaders: boolean; baseURL: string; model: string; temperature: number; jsonMode: boolean; hasApiKey: boolean; persisted: boolean };
   processor: ProcessingSettings;
 }
-export interface SettingsInput { ai: { baseURL: string; model: string; temperature: number; jsonMode: boolean; apiKey?: string }; processor: ProcessingSettings }
+export interface SettingsInput { ai: { protocol?: AIProtocol; systemPrompt?: string; headers?: Record<string, string>; baseURL: string; model: string; temperature: number; jsonMode: boolean; apiKey?: string }; processor: ProcessingSettings }
 export interface TaskLibrary { rewritten: RewrittenDocument | null; processed: ProcessedDocument | null; active: ('rewrite' | 'process')[] }
 export type StudioEvent = { kind: 'rewrite'; progress: RewriteProgress } | { kind: 'process'; progress: ProcessingProgress } | { kind: 'settled'; taskId: string; operation: 'rewrite' | 'process' };
 import type { DownloadTask } from '../../../../packages/core/src/fetcher/types.js';
@@ -21,6 +27,17 @@ export interface TaskAssets {
 }
 export interface DesktopEvent { task: DownloadTask; kind: 'state' | 'metadata' | 'success' | 'failure' }
 export interface ElectronAPI {
+  createManual(input: ManualDraft): Promise<Reply<DownloadTask>>;
+  chooseMedia(kind: 'video' | 'cover'): Promise<Reply<MediaSelection | null>>;
+  droppedMedia(file: File): MediaSelection;
+  openVerification(taskId: string): Promise<Reply<void>>;
+  finishVerification(taskId: string): Promise<Reply<DownloadTask>>;
+  accounts(): Promise<Reply<PlatformAccount[]>>;
+  connectPlatform(platform: TargetPlatform): Promise<Reply<PlatformAccount>>;
+  closePlatform(platform: TargetPlatform): Promise<Reply<void>>;
+  publish(taskId: string, platform: TargetPlatform): Promise<Reply<PublishResult>>;
+  onAccount(listener: (account: PlatformAccount) => void): () => void;
+  fetchModels(settings: SettingsInput['ai']): Promise<Reply<string[]>>;
   studioSettings(): Promise<Reply<StudioSettings>>;
   saveStudioSettings(settings: SettingsInput): Promise<Reply<StudioSettings>>;
   library(taskId: string): Promise<Reply<TaskLibrary>>;
