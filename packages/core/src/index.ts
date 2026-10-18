@@ -14,3 +14,5 @@ export { CookieStore } from './fetcher/cookies.js';
 export { fetchModels } from './rewriter/client.js';
 export { PublisherService, PublisherError } from './publisher/publisher.js';
 export type { PlatformAccount, PublishInput, PublishResult } from './publisher/publisher.js';
+
+export * from './publisher/publications.js';

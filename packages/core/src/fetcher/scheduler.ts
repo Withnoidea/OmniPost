@@ -26,6 +26,7 @@ export class DownloadScheduler {
   private readonly attachments = new Map<string, Promise<DownloadTask>>();
   private readonly workers = new Set<Promise<void>>();
   private readonly waiters = new Map<string, Array<(task: DownloadTask) => void>>();
+  private readonly deletedTasks = new Set<string>();
   private readonly concurrency: number;
   private readonly timeoutMs: number;
   private readonly metadataTimeoutMs: number;
@@ -156,6 +157,23 @@ export class DownloadScheduler {
     // Terminal states are only exposed once their journal write has completed.
     if (terminal(task.state) && !this.controllers.has(id)) return structuredClone(task);
     return new Promise((resolve) => { const waiters = this.waiters.get(id) ?? []; waiters.push(resolve); this.waiters.set(id, waiters); });
+  }
+  async deleteTask(id: string): Promise<void> {
+    if (this.closed) throw new FetcherError('STORE_LOCKED');
+    this.deletedTasks.add(id);
+    const enqueuing = this.attachments.get(id);
+    if (enqueuing) await enqueuing.catch(() => undefined);
+    const controller = this.controllers.get(id);
+    if (controller) {
+      controller.abort(new FetcherError('CANCELLED'));
+    }
+    this.tasks.delete(id);
+    this.inputs.delete(id);
+    this.controllers.delete(id);
+    this.activeKinds.delete(id);
+    this.attachments.delete(id);
+    this.waiters.delete(id);
+    await this.store.remove(id).catch(() => undefined);
   }
   async cancel(id: string): Promise<void> {
     // A known metadata task may be cancelled while attachment preflight/journaling is still pending.
@@ -339,6 +357,12 @@ export class DownloadScheduler {
     this.emit({ type: 'state', task });
   }
   private async finish(task: DownloadTask, committed = false): Promise<void> {
+    if (this.deletedTasks.has(task.id)) {
+      this.controllers.delete(task.id);
+      this.activeKinds.delete(task.id);
+      this.waiters.delete(task.id);
+      return;
+    }
     task.updatedAt = new Date().toISOString();
     try { await this.store.save(task); }
     catch {
@@ -357,6 +381,8 @@ export class DownloadScheduler {
     this.waiters.delete(task.id);
   }
   private emit(event: DownloadEvent): void {
+    const taskId = 'task' in event ? event.task.id : event.taskId;
+    if (this.deletedTasks.has(taskId)) return;
     const safely = (callback: () => void): void => { try { void Promise.resolve(callback()).catch(() => {}); } catch { /* UI observers must not corrupt the queue */ } };
     safely(() => this.options.onEvent?.(structuredClone(event)));
     if (event.type === 'progress') safely(() => this.options.onProgress?.(event.taskId, structuredClone(event.progress)));

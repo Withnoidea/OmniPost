@@ -36,10 +36,14 @@ const api: ElectronAPI = {
   attachDroppedFile: (id, file) => ipcRenderer.invoke('omni:attach', id, webUtils.getPathForFile(file)),
   assets: (id) => ipcRenderer.invoke('omni:assets', id),
   cancel: (id) => ipcRenderer.invoke('omni:cancel', id),
+  deleteTask: (id) => ipcRenderer.invoke('omni:delete-task', id),
   setProxy: (settings) => ipcRenderer.invoke('omni:proxy', settings),
   testProxy: (url) => ipcRenderer.invoke('omni:test-proxy', url),
   openAssets: (id) => ipcRenderer.invoke('omni:open-assets', id),
   copyText: (text) => ipcRenderer.invoke('omni:copy', text),
+  updatePublication: (id, metrics, url) => ipcRenderer.invoke('omni:update-publication', id, metrics, url),
+  deletePublication: (id) => ipcRenderer.invoke('omni:delete-publication', id),
+  openExternalUrl: (url) => ipcRenderer.invoke('omni:open-url', url),
   windowControl: (action) => ipcRenderer.invoke('omni:window', action),
   onTask: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, event: DesktopEvent): void => listener(event);

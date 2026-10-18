@@ -6,6 +6,8 @@ export interface MediaSelection { path: string; name: string }
 import type { AIProtocol } from '../../../../packages/core/src/rewriter/types.js';
 import type { RewrittenDocument, RewriteTaskResult, RewriteProgress, TargetPlatform, LocalizedCopy } from '../../../../packages/core/src/rewriter/types.js';
 import type { ProcessedDocument, ProcessingSettings, ProcessingProgress } from '../../../../packages/core/src/processor/types.js';
+import type { CreatorPulseMetrics, PublicationMetrics, PublicationRecord } from '../../../../packages/core/src/publisher/publications.js';
+export type { CreatorPulseMetrics, PublicationMetrics, PublicationRecord };
 import type { AnalyticsSnapshot } from '../../../../packages/core/src/telemetry.js';
 export type { RewrittenDocument, RewriteTaskResult, TargetPlatform, LocalizedCopy, ProcessedDocument, ProcessingSettings, AnalyticsSnapshot };
 export interface StudioSettings {
@@ -55,10 +57,14 @@ export interface ElectronAPI {
   attachDroppedFile(taskId: string, file: File): Promise<Reply<DownloadTask>>;
   assets(taskId: string): Promise<Reply<TaskAssets>>;
   cancel(taskId: string): Promise<Reply<void>>;
+  deleteTask(taskId: string): Promise<Reply<{ ok: boolean; id: string }>>;
   setProxy(settings: Pick<ProxySettings, 'enabled' | 'url'>): Promise<Reply<ProxySettings>>;
   testProxy(url: string): Promise<Reply<ProxyTestResult>>;
   openAssets(taskId: string): Promise<Reply<void>>;
   copyText(text: string): Promise<Reply<void>>;
+  updatePublication(id: string, metrics: Partial<PublicationMetrics>, url?: string): Promise<Reply<PublicationRecord | null>>;
+  deletePublication(id: string): Promise<Reply<{ ok: boolean }>>;
+  openExternalUrl(url: string): Promise<Reply<{ ok: boolean }>>;
   windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<Reply<void>>;
   onTask(listener: (event: DesktopEvent) => void): () => void;
 }

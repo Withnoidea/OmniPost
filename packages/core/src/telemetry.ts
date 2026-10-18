@@ -4,6 +4,8 @@ import path from 'node:path';
 import { atomicJson, isRecord, TASK_ID } from './fetcher/store.js';
 import type { DownloadTask } from './fetcher/types.js';
 import type { TargetPlatform, TokenUsage } from './rewriter/types.js';
+import { loadPublications, calculateCreatorPulse, type CreatorPulseMetrics, type PublicationRecord } from './publisher/publications.js';
+export type { CreatorPulseMetrics, PublicationRecord };
 export interface OperationRecord {
   schemaVersion: 1; id: string; taskId: string; kind: 'rewrite' | 'process';
   startedAt: string; finishedAt?: string; state: 'started' | 'succeeded' | 'failed';
@@ -25,6 +27,7 @@ export interface AnalyticsSnapshot {
   avgProcessingMs: number | null; incomplete: number; unreadableRecords: number;
   trend: { date: string; tasks: number }[];
   platforms: Record<TargetPlatform, number>;
+  creator?: CreatorPulseMetrics | undefined;
 }
 export async function collectAnalytics(root: string, tasks: DownloadTask[], now = new Date()): Promise<AnalyticsSnapshot> {
   const result: AnalyticsSnapshot = { tasks: tasks.length, readyTasks: tasks.filter(t => t.asset).length, processedTasks: 0,
@@ -67,5 +70,7 @@ export async function collectAnalytics(root: string, tasks: DownloadTask[], now 
     }
   }
   result.processedTasks = processed.size; result.avgProcessingMs = processes ? latency / processes : null;
+  const publications = await loadPublications(root);
+  result.creator = calculateCreatorPulse(publications);
   return result;
 }

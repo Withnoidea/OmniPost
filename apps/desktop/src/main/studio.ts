@@ -197,6 +197,10 @@ export class StudioService {
 
   }
 
+  cancelTask(id: string): void {
+    this.jobs.get(id + ':rewrite')?.abort();
+    this.jobs.get(id + ':process')?.abort();
+  }
   cancel(id: string, kind: unknown): void {
 
     if (kind !== 'rewrite' && kind !== 'process') throw new DesktopError('INVALID_INPUT', '未知操作。');

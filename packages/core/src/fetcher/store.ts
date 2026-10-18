@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, open, readdir, readFile, rename, unlink, lstat, realpath } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, unlink, rm, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { FetcherError, throwIfAborted } from './errors.js';
@@ -73,6 +73,14 @@ export class AssetStore {
   }
   async close(): Promise<void> {
     if (this.lockFile) { await unlink(this.lockFile); delete this.lockFile; }
+  }
+  async remove(id: string): Promise<void> {
+    const job = this.jobPath(id);
+    const work = this.workDirectory(id);
+    const asset = this.assetDirectory(id);
+    await rm(work, { recursive: true, force: true }).catch(() => undefined);
+    await rm(asset, { recursive: true, force: true }).catch(() => undefined);
+    await rm(job, { force: true }).catch(() => undefined);
   }
   async save(task: DownloadTask): Promise<void> { await atomicJson(this.jobPath(task.id), task); }
   async createWorkspace(id: string): Promise<string> {

@@ -6,6 +6,7 @@ import { StudioService } from './studio.js';
 import { RewriterError } from '../../../../packages/core/src/rewriter/errors.js';
 import { ProcessorError } from '../../../../packages/core/src/processor/types.js';
 import { collectAnalytics } from '../../../../packages/core/src/telemetry.js';
+import { savePublication, updatePublicationMetrics, deletePublication, type PublicationMetrics } from '../../../../packages/core/src/publisher/publications.js';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeTheme, safeStorage, session, shell } from 'electron';
 import type { IpcMainInvokeEvent } from 'electron';
 import { mkdir, readFile, stat } from 'node:fs/promises';
@@ -225,7 +226,29 @@ function registerIPC(): void {
     if (!videoFile) {
       throw new DesktopError('ASSET_NOT_FOUND', '未找到可用视频文件');
     }
-    return publisher.publish({ platform: platform as TargetPlatform, copy, videoPath: await assetPath(engine().getAssetDirectory(task.id), videoFile) });
+    const result = await publisher.publish({ platform: platform as TargetPlatform, copy, videoPath: await assetPath(engine().getAssetDirectory(task.id), videoFile) });
+    try {
+      const meta = task.asset?.metadata ?? task.metadataAsset?.metadata;
+      await savePublication(dataDirectory, {
+        taskId: task.id,
+        taskTitle: meta?.title ?? task.sourceUrl ?? '未命名素材',
+        cover: task.asset?.thumbnail.file ?? task.metadataAsset?.thumbnail.file ?? null,
+        platform: platform as TargetPlatform,
+        publishedAt: new Date().toISOString(),
+        title: copy.title,
+        status: 'published',
+        metrics: {
+          views: 0,
+          likes: 0,
+          comments: 0,
+          shares: 0,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    } catch {
+      // Keep publish resilient
+    }
+    return result;
   });
   handle('omni:studio-settings', () => studio.publicSettings());
   handle('omni:save-studio-settings', input => studio.save(input));
@@ -249,11 +272,32 @@ function registerIPC(): void {
     return result.canceled || !result.filePaths[0] ? null : attach(task.id, result.filePaths[0]);
   });
   handle('omni:cancel', async (id) => { await engine().cancel(getTask(id).id); });
+  handle('omni:delete-task', async (id) => {
+    const targetId = taskId(id);
+    studio.cancelTask(targetId);
+    sizeCache.delete(targetId);
+    await deletePublication(dataDirectory, targetId).catch(() => undefined);
+    await engine().deleteTask(targetId);
+    return { ok: true, id: targetId };
+  });
   handle('omni:open-assets', async (id) => {
     const task = getTask(id);
     if (!task.asset && !task.metadataAsset) throw new DesktopError('INVALID_STATE', '尚未生成本地素材。');
     const error = await shell.openPath(engine().getAssetDirectory(task.id));
     if (error) throw new DesktopError('OPEN_FAILED', '无法打开素材目录。');
+  });
+  handle('omni:update-publication', async (pubId, metrics, url) => {
+    return updatePublicationMetrics(dataDirectory, text(pubId), metrics as Partial<PublicationMetrics>, url ? text(url) : undefined);
+  });
+  handle('omni:delete-publication', async (pubId) => {
+    await deletePublication(dataDirectory, text(pubId));
+    return { ok: true };
+  });
+  handle('omni:open-url', async (url) => {
+    const target = text(url);
+    if (!/^https?:\/\//i.test(target)) throw new DesktopError('INVALID_INPUT', '仅支持 HTTP/HTTPS 外部链接');
+    await shell.openExternal(target);
+    return { ok: true };
   });
   handle('omni:copy', (input) => { clipboard.writeText(text(input, 100000)); });
   handle('omni:window', (action) => {

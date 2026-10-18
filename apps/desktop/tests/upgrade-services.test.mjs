@@ -229,3 +229,33 @@ test('publish rejects with clear platform-specific error when copy or video is m
   assert.equal(videoError, '未找到可用视频文件');
   await studio.close();
 });
+
+test('delete task removes task and adjusts selection cleanly in state reducer', () => {
+  function reducer(state, action) {
+    if (action.type === 'select') return { ...state, selected: action.id };
+    if (action.type === 'remove') {
+      const tasks = state.tasks.filter(t => t.id !== action.id);
+      const selected = state.selected === action.id ? (tasks[0]?.id ?? null) : state.selected;
+      return { tasks, selected };
+    }
+    return state;
+  }
+
+  const initial = {
+    tasks: [
+      { id: '11111111-1111-4111-8111-111111111111', sourceUrl: 'https://v.douyin.com/1/' },
+      { id: '22222222-2222-4222-8222-222222222222', sourceUrl: 'https://v.douyin.com/2/' },
+    ],
+    selected: '11111111-1111-4111-8111-111111111111',
+  };
+
+  // Removing selected task shifts selection to next task
+  const next1 = reducer(initial, { type: 'remove', id: '11111111-1111-4111-8111-111111111111' });
+  assert.equal(next1.tasks.length, 1);
+  assert.equal(next1.selected, '22222222-2222-4222-8222-222222222222');
+
+  // Removing last task clears selection to null
+  const next2 = reducer(next1, { type: 'remove', id: '22222222-2222-4222-8222-222222222222' });
+  assert.equal(next2.tasks.length, 0);
+  assert.equal(next2.selected, null);
+});

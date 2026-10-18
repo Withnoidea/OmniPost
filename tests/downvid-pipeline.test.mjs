@@ -6,6 +6,7 @@ import path from 'node:path';
 import { normalizeSource, normalizeProxy } from '../dist/packages/core/src/fetcher/config.js';
 import { classifyDownloadError, FetcherError } from '../dist/packages/core/src/fetcher/errors.js';
 import { prepareManual } from '../dist/packages/core/src/fetcher/manual.js';
+import { DownloadScheduler } from '../dist/packages/core/src/fetcher/scheduler.js';
 
 test('Downvid URL normalization supports Douyin, Bilibili, and Kuaishou formats', () => {
   // Douyin
@@ -119,4 +120,44 @@ test('manual video attachment automatically extracts duration, resolution and ca
   assert.equal(savedMetadata.durationSeconds, 125);
   assert.equal(savedMetadata.width, 1920);
   assert.equal(savedMetadata.height, 1080);
+});
+
+test('scheduler.deleteTask(id) cancels active task and purges job, work, and asset directories', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'omnipost-delete-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const scheduler = await DownloadScheduler.create({
+    dataDirectory: root,
+    tools: { ytDlp: 'mock', ffmpeg: 'mock', ffprobe: 'mock', node: 'mock' },
+  }, async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+
+  const task = await scheduler.createManual({
+    title: '即将被删除的素材',
+    description: 'desc',
+    author: 'author',
+    tags: [],
+    platform: 'local',
+  });
+
+  const taskId = task.id;
+  assert.ok(scheduler.getTask(taskId));
+
+  const jobFile = path.join(root, 'jobs', `${taskId}.json`);
+  const assetDir = path.join(root, 'assets', taskId);
+  await mkdir(assetDir, { recursive: true });
+  await writeFile(path.join(assetDir, 'dummy.txt'), 'content');
+
+  await scheduler.deleteTask(taskId);
+
+  assert.equal(scheduler.getTask(taskId), undefined);
+
+  let jobExists = true;
+  try { await readFile(jobFile); } catch (e) { if (e.code === 'ENOENT') jobExists = false; }
+  assert.equal(jobExists, false);
+
+  let assetExists = true;
+  try { await readFile(path.join(assetDir, 'dummy.txt')); } catch (e) { if (e.code === 'ENOENT') assetExists = false; }
+  assert.equal(assetExists, false);
+
+  await scheduler.close();
 });
