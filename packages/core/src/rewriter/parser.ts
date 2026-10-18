@@ -9,7 +9,7 @@ function field(value: unknown, max: number): string {
 }
 export function validateCopy(value: unknown, platform: TargetPlatform): LocalizedCopy {
   if (!isRecord(value)) return invalid();
-  const title = field(value.title, platform === 'bilibili' ? 80 : platform === 'xiaohongshu' ? 40 : 30);
+  const title = field(value.title, platform === 'bilibili' ? 80 : platform === 'xiaohongshu' ? 20 : 30);
   let body = field(value.body, 4000);
   if (!Array.isArray(value.tags) || value.tags.length > 10) return invalid();
   const tags = [...new Set(value.tags.map((tag: unknown) => {

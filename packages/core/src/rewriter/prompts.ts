@@ -2,10 +2,10 @@ import { RewriterError } from './errors.js';
 import { TARGET_PLATFORMS, type SourceText, type TargetPlatform } from './types.js';
 
 export const PLATFORM_STYLES: Record<TargetPlatform, string> = {
-  xiaohongshu: '小红书：爆款二段式标题，用「痛点｜收获」结构，必须以一个全角竖线｜分隔两段，最多40字。正文丰富但克制地使用 Emoji，提炼真实痛点与种草要点，给出自然互动引导。tags 仅选3~5个相关话题；body 不写末尾话题，程序会将 tags 作为 #话题 追加到文末。',
+  xiaohongshu: '小红书：爆款二段式标题，用「痛点｜收获」结构，必须以一个全角竖线｜分隔两段，严格控制在20字以内（官方标题上限仅20字，推荐14~18字）。正文丰富但克制地使用 Emoji，提炼真实痛点与种草要点，给出自然互动引导。tags 仅选3~5个相关话题；body 不写末尾话题，程序会将 tags 作为 #话题 追加到文末。',
   bilibili: 'B站：吸引力标题，最多80字，用恰当的梗或好奇心引导但不硬造梗。正文为视频核心摘要简介；category 必须给出推荐投递分区的中文名称（建议而非平台ID），tags 为1~10个相关标签。',
   douyin: '抖音：hook 必须是黄金3秒文案钩子，最多80字；title 是最多30字的极简吸引力标题。body 简短有节奏，突出一个核心看点和自然互动；tags 为1~10个相关、有传播潜力的话题。',
-  kuaishou: '快手：hook 必须是黄金3秒文案钩子，最多80字；title 是最多30字的极简吸引力标题。body 用接地气的口语，突出实用价值、真实感和自然互动；tags 为1~10个相关、有传播潜力的话题。',
+  kuaishou: '快手：hook 必须是黄金3秒文案钩子，最多80字；title 是最多30字的极简吸引力标题。body 用接地气的口语，突出实用价值、真实感和自然互动；tags 严格限制为1~4个精选话题标签（快手平台官方规定话题最多4个，绝对不得超过4个）。',
 };
 export function validatePlatform(value: unknown): asserts value is TargetPlatform {
   if (typeof value !== 'string' || !TARGET_PLATFORMS.includes(value as TargetPlatform)) throw new RewriterError('INVALID_PLATFORM');

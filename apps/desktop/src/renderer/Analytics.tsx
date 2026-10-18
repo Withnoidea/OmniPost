@@ -27,6 +27,14 @@ import { api, unwrap, errorMessage } from './bridge.js';
 import { bytes } from './model.js';
 import { platformNames } from './StudioPanel.js';
 
+
+const creatorManageUrls: Record<TargetPlatform, string> = {
+  xiaohongshu: 'https://creator.xiaohongshu.com/new/note-manager',
+  bilibili: 'https://member.bilibili.com/platform/upload-manager/article',
+  douyin: 'https://creator.douyin.com/creator-micro/content/manage',
+  kuaishou: 'https://cp.kuaishou.com/article/manage/video',
+};
+
 const colors: Record<TargetPlatform, string> = {
   xiaohongshu: 'var(--accent-primary)',
   bilibili: 'var(--chart-blue)',
@@ -54,6 +62,46 @@ export function Analytics() {
     shares: 0,
     url: '',
   });
+
+  const [syncing, setSyncing] = useState(false);
+  const [syncingPlatform, setSyncingPlatform] = useState<TargetPlatform | null>(null);
+
+  const syncData = async (targetPlatform?: TargetPlatform): Promise<void> => {
+    setSyncing(true);
+    if (targetPlatform) setSyncingPlatform(targetPlatform);
+    setError('');
+    setNotice('');
+    try {
+      const res = await api.syncMetrics(targetPlatform);
+      if (res && res.ok) {
+        const { succeeded, failed, updatedCount } = res.value;
+        const messages: string[] = [];
+        if (succeeded.length > 0) {
+          const names = succeeded.map(p => platformNames[p]).join('、');
+          if (updatedCount > 0) {
+            messages.push(`已成功从 ${names} 同步最新数据，共更新 ${updatedCount} 篇作品的播放与互动量！`);
+          } else {
+            messages.push(`已完成 ${names} 创作者数据巡检（线上暂未检测到播放量或点赞数新增变动）。`);
+          }
+        }
+        if (failed.length > 0) {
+          const failDetails = failed.map(f => `${platformNames[f.platform]}: ${f.error}`).join('；');
+          setError(`部分平台同步提示：${failDetails}。若平台需要安全验证，您可先在下方「平台账号管理」中点击检查登录，或通过作品右侧铅笔图标手动录入最新数据。`);
+        }
+        if (messages.length > 0) {
+          setNotice(messages.join(' '));
+        }
+      } else if (res && !res.ok) {
+        setError(res.error?.message ?? '同步平台数据失败，请检查网络或重新登录对应平台。');
+      }
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSyncing(false);
+      setSyncingPlatform(null);
+      void refresh();
+    }
+  };
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -126,9 +174,9 @@ export function Analytics() {
           <p>动态追踪多平台发布表现、播放互动与粉丝反馈，让每一次创作皆有声响。</p>
         </div>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-          <button className="secondary-button" disabled={loading} onClick={() => void refresh()}>
-            {loading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-            <span>同步最新数据</span>
+          <button className="secondary-button" disabled={loading || syncing} onClick={() => void syncData()}>
+            {syncing ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+            <span>{syncing ? '正在同步平台数据...' : '同步最新数据'}</span>
           </button>
         </div>
       </header>
@@ -323,11 +371,23 @@ export function Analytics() {
                           <td style={{ padding: '12px 14px', color: 'var(--text-secondary)' }}>{formatNum(pub.metrics?.shares ?? 0)}</td>
                           <td style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                             <div style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
-                              {pub.url && (
+                              {pub.url ? (
                                 <button className="icon-button" title="在平台打开作品" onClick={() => void openUrl(pub.url)}>
                                   <ExternalLink size={13} />
                                 </button>
+                              ) : (
+                                <button className="icon-button" title={`前往${platformNames[pub.platform]}创作者中心`} onClick={() => void openUrl(creatorManageUrls[pub.platform])}>
+                                  <ExternalLink size={13} />
+                                </button>
                               )}
+                              <button
+                                className="icon-button"
+                                title={`从${platformNames[pub.platform]}同步该作品最新数据`}
+                                disabled={syncing}
+                                onClick={() => void syncData(pub.platform)}
+                              >
+                                <RefreshCw size={13} className={syncing && syncingPlatform === pub.platform ? 'spin' : ''} />
+                              </button>
                               <button
                                 className="icon-button"
                                 title="录入/编辑作品数据与链接"

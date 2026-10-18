@@ -1,4 +1,4 @@
-import path from 'node:path';
+﻿import path from 'node:path';
 import { atomicJson, readJson, isRecord } from '../fetcher/store.js';
 import type { TargetPlatform } from '../rewriter/types.js';
 
@@ -155,7 +155,8 @@ export async function savePublication(
 
   const index = existing.findIndex(p => p.id === id);
   if (index >= 0) {
-    existing[index] = { ...existing[index], ...record, metrics: { ...(existing[index]?.metrics ?? {}), ...record.metrics } };
+    const prev = existing[index]!;
+    existing[index] = { ...prev, ...record, metrics: { ...(prev.metrics ?? {}), ...record.metrics } };
   } else {
     existing.unshift(record);
   }
@@ -189,4 +190,122 @@ export async function deletePublication(dataDirectory: string, id: string): Prom
   const existing = await loadPublications(dataDirectory);
   const filtered = existing.filter(p => p.id !== id && p.taskId !== id);
   await atomicJson(publicationsFile(dataDirectory), filtered);
+}
+
+export interface ScrapedNoteMetric {
+  title: string;
+  views: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  url?: string | undefined;
+  publishedAt?: string | undefined;
+}
+
+export function normalizeTitleForComparison(title: string): string {
+  return title
+    .replace(/#[^\s#]+/g, '')
+    .replace(/@[^\s@]+/g, '')
+    .replace(/[\s#＃|｜\-_—.,，!！?？:：()（）\[\]【】"“”'‘’]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+export function calculateTitleSimilarity(titleA: string, titleB: string): number {
+  const a = normalizeTitleForComparison(titleA);
+  const b = normalizeTitleForComparison(titleB);
+  if (!a || !b) return 0;
+  if (a === b) return 1.0;
+  if (a.includes(b) || b.includes(a)) return 0.9;
+
+  const minPrefix = Math.min(a.length, b.length, 8);
+  if (minPrefix >= 4 && a.slice(0, minPrefix) === b.slice(0, minPrefix)) {
+    return 0.85;
+  }
+
+  const getBigrams = (str: string) => {
+    const s = new Set<string>();
+    for (let i = 0; i < str.length - 1; i++) s.add(str.slice(i, i + 2));
+    return s;
+  };
+  const bigramsA = getBigrams(a);
+  const bigramsB = getBigrams(b);
+  if (!bigramsA.size || !bigramsB.size) return 0;
+  let intersection = 0;
+  for (const bg of bigramsA) {
+    if (bigramsB.has(bg)) intersection++;
+  }
+  const union = bigramsA.size + bigramsB.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+export async function syncPlatformMetrics(
+  dataDirectory: string,
+  platform: TargetPlatform,
+  scrapedNotes: ScrapedNoteMetric[]
+): Promise<{ updatedCount: number; matchedIds: string[] }> {
+  const existing = await loadPublications(dataDirectory);
+  const platformPubs = existing.filter(p => p.platform === platform);
+
+  if (!platformPubs.length || !scrapedNotes.length) {
+    return { updatedCount: 0, matchedIds: [] };
+  }
+
+  let updatedCount = 0;
+  const matchedIds: string[] = [];
+  const usedScrapedIndices = new Set<number>();
+
+  for (const pub of platformPubs) {
+    let bestMatchIdx = -1;
+    let bestScore = 0;
+
+    for (let i = 0; i < scrapedNotes.length; i++) {
+      if (usedScrapedIndices.has(i)) continue;
+      const scraped = scrapedNotes[i];
+      if (!scraped) continue;
+
+      if (pub.url && scraped.url && pub.url === scraped.url) {
+        bestMatchIdx = i;
+        bestScore = 1.0;
+        break;
+      }
+
+      const score = calculateTitleSimilarity(pub.title, scraped.title);
+      if (score > bestScore && score >= 0.4) {
+        bestScore = score;
+        bestMatchIdx = i;
+      }
+    }
+
+    if (bestMatchIdx === -1 && platformPubs.length === 1 && scrapedNotes.length === 1 && !usedScrapedIndices.has(0)) {
+      bestMatchIdx = 0;
+    }
+
+    if (bestMatchIdx >= 0) {
+      const scraped = scrapedNotes[bestMatchIdx];
+      if (scraped) {
+        usedScrapedIndices.add(bestMatchIdx);
+        matchedIds.push(pub.id);
+
+        const oldMetrics = pub.metrics || { views: 0, likes: 0, comments: 0, shares: 0 };
+        pub.metrics = {
+          views: Math.max(oldMetrics.views, scraped.views),
+          likes: Math.max(oldMetrics.likes, scraped.likes),
+          comments: Math.max(oldMetrics.comments, scraped.comments),
+          shares: Math.max(oldMetrics.shares, scraped.shares),
+          updatedAt: new Date().toISOString(),
+        };
+        if (scraped.url && !pub.url) {
+          pub.url = scraped.url;
+        }
+        updatedCount++;
+      }
+    }
+  }
+
+  if (updatedCount > 0) {
+    await atomicJson(publicationsFile(dataDirectory), existing);
+  }
+
+  return { updatedCount, matchedIds };
 }

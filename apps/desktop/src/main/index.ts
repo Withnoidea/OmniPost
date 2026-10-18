@@ -206,6 +206,70 @@ function registerIPC(): void {
   handle('omni:accounts', () => publisher.list());
   handle('omni:connect-platform', platform => { validatePlatform(platform); return publisher.connect(platform); });
   handle('omni:close-platform', platform => { validatePlatform(platform); return publisher.closePlatform(platform); });
+  handle('omni:publish-all', async (id, requestedPlatforms) => {
+    const task = getTask(id);
+    if (!task.asset || !['READY', 'completed'].includes(task.state)) {
+      throw new DesktopError('ASSET_NOT_READY', '请先挂载视频，使素材进入 READY 状态。');
+    }
+    const library = await studio.library(task);
+    if (library.active.length) {
+      throw new DesktopError('BUSY', '请等待文案或视频处理完成。');
+    }
+
+    const accounts = await publisher.list();
+    const connected = accounts.filter(a => a.state === 'connected').map(a => a.platform);
+    if (!connected.length) {
+      throw new DesktopError('NO_CONNECTED_PLATFORMS', '尚未登录任何发布平台，请先在“平台账号管理”中完成登录。');
+    }
+
+    const targets: TargetPlatform[] = (Array.isArray(requestedPlatforms) && requestedPlatforms.length ? (requestedPlatforms as TargetPlatform[]) : connected)
+      .filter((p): p is TargetPlatform => connected.includes(p));
+
+    const videoFile = library.processed?.video?.file ?? task.asset.video?.file;
+    if (!videoFile) {
+      throw new DesktopError('ASSET_NOT_FOUND', '未找到可用视频文件');
+    }
+    const videoPath = await assetPath(engine().getAssetDirectory(task.id), videoFile);
+
+    const platformLabels: Record<TargetPlatform, string> = {
+      xiaohongshu: '小红书',
+      bilibili: '哔哩哔哩',
+      douyin: '抖音',
+      kuaishou: '快手',
+    };
+
+    const succeeded: TargetPlatform[] = [];
+    const failed: Array<{ platform: TargetPlatform; error: string }> = [];
+
+    for (const plat of targets) {
+      const copy = library.rewritten?.platforms[plat];
+      if (!copy || !copy.title?.trim()) {
+        failed.push({ platform: plat, error: `缺少 ${platformLabels[plat]} 平台文案` });
+        continue;
+      }
+      try {
+        await publisher.publish({ platform: plat, copy, videoPath });
+        try {
+          const meta = task.asset?.metadata ?? task.metadataAsset?.metadata;
+          await savePublication(dataDirectory, {
+            taskId: task.id,
+            taskTitle: meta?.title ?? task.sourceUrl ?? '未命名素材',
+            cover: task.asset?.thumbnail.file ?? task.metadataAsset?.thumbnail.file ?? null,
+            platform: plat,
+            publishedAt: new Date().toISOString(),
+            title: copy.title,
+            status: 'published',
+            metrics: { views: 0, likes: 0, comments: 0, shares: 0, updatedAt: new Date().toISOString() },
+          });
+        } catch { /* Telemetry fallback */ }
+        succeeded.push(plat);
+      } catch (err) {
+        failed.push({ platform: plat, error: err instanceof Error ? err.message : '预填失败' });
+      }
+    }
+
+    return { succeeded, failed };
+  });
   handle('omni:publish', async (id, platform) => {
     validatePlatform(platform); const task = getTask(id);
     if (!task.asset || !['READY', 'completed'].includes(task.state)) throw new DesktopError('ASSET_NOT_READY', '请先挂载视频，使素材进入 READY 状态。');
@@ -258,6 +322,11 @@ function registerIPC(): void {
   handle('omni:process', id => studio.process(getTask(id)));
   handle('omni:cancel-studio', (id, kind) => studio.cancel(getTask(id).id, kind));
   handle('omni:analytics', () => collectAnalytics(dataDirectory, engine().listTasks()));
+  handle('omni:sync-metrics', async (platform) => {
+    const plat = platform ? (text(platform) as TargetPlatform) : undefined;
+    if (plat) validatePlatform(plat);
+    return publisher.syncMetrics(dataDirectory, plat);
+  });
   handle('omni:snapshot', () => ({ tasks: engine().listTasks(), proxy, version: app.getVersion(), dataDirectory }));
   handle('omni:fetch', (url) => engine().fetchMetadata(text(url), { proxy: proxy.enabled ? proxy.url : '' }));
   handle('omni:download', (url) => engine().download(text(url), { proxy: proxy.enabled ? proxy.url : '' }));

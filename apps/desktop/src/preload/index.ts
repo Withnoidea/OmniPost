@@ -11,6 +11,7 @@ const api: ElectronAPI = {
   connectPlatform: platform => ipcRenderer.invoke('omni:connect-platform', platform),
   closePlatform: platform => ipcRenderer.invoke('omni:close-platform', platform),
   publish: (id, platform) => ipcRenderer.invoke('omni:publish', id, platform),
+  publishAll: (id, platforms) => ipcRenderer.invoke('omni:publish-all', id, platforms),
   onAccount: listener => {
     const handler = (_event: Electron.IpcRendererEvent, account: PlatformAccount): void => listener(account);
     ipcRenderer.on('omni:account', handler);
@@ -24,6 +25,7 @@ const api: ElectronAPI = {
   processMedia: id => ipcRenderer.invoke('omni:process', id),
   cancelStudio: (id, kind) => ipcRenderer.invoke('omni:cancel-studio', id, kind),
   analytics: () => ipcRenderer.invoke('omni:analytics'),
+  syncMetrics: (platform) => ipcRenderer.invoke('omni:sync-metrics', platform),
   onStudio: listener => {
     const handler = (_event: Electron.IpcRendererEvent, event: StudioEvent): void => listener(event);
     ipcRenderer.on('omni:studio', handler);

@@ -1,31 +1,153 @@
-import { chromium, type BrowserContext, type Page, type BrowserType, type Locator } from 'playwright';
+﻿import { chromium, type BrowserContext, type Page, type BrowserType, type Locator } from 'playwright';
 import { lstat, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicJson, isRecord } from '../fetcher/store.js';
 import { TARGET_PLATFORMS, type LocalizedCopy, type TargetPlatform } from '../rewriter/types.js';
 import { PLATFORM_ADAPTERS, platformHost, creatorRoute } from './platforms.js';
+import { syncPlatformMetrics, type ScrapedNoteMetric } from './publications.js';
 
 export type AccountState = 'disconnected' | 'connecting' | 'connected';
 export interface PlatformAccount { platform: TargetPlatform; state: AccountState; checkedAt: string | null; windowOpen: boolean }
 export interface PublishInput { platform: TargetPlatform; videoPath: string; copy: LocalizedCopy }
 export interface PublishResult { platform: TargetPlatform; uploaded: boolean; filled: string[]; warnings: string[]; manualConfirmation: true }
+export interface SyncMetricsResult { succeeded: TargetPlatform[]; failed: Array<{ platform: TargetPlatform; error: string }>; updatedCount: number }
+
 export class PublisherError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'PublisherError'; }
 }
-export interface PublisherOptions { dataDirectory: string; onAccount?: (account: PlatformAccount) => void; loginTimeoutMs?: number; pollMs?: number; fieldTimeoutMs?: number }
+
+export interface PublisherOptions {
+  dataDirectory: string;
+  onAccount?: (account: PlatformAccount) => void;
+  loginTimeoutMs?: number;
+  pollMs?: number;
+  fieldTimeoutMs?: number;
+}
+
+function parseNumValue(v: unknown): number {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const s = v.replace(/,/g, '').trim();
+    const w = s.match(/([\d.]+)\s*[wW万]/);
+    if (w && w[1]) return Math.round(parseFloat(w[1]) * 10000);
+    const k = s.match(/([\d.]+)\s*[kK]/);
+    if (k && k[1]) return Math.round(parseFloat(k[1]) * 1000);
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+export function parseApiResponse(
+  platform: TargetPlatform,
+  _url: string,
+  json: unknown,
+  collector: (note: ScrapedNoteMetric) => void
+): void {
+  if (!json || typeof json !== 'object') return;
+
+  function handleItem(item: any) {
+    if (!item || typeof item !== 'object') return;
+    const archive = item.Archive || item.archive || item;
+    const title = archive.title || archive.display_title || archive.caption || archive.desc || item.title || item.display_title || item.caption;
+    if (!title || typeof title !== 'string' || !title.trim()) return;
+
+    const id = archive.bvid || archive.note_id || archive.noteId || archive.item_id || archive.aweme_id || archive.photoId || archive.id || item.note_id || item.id;
+    let noteUrl: string | undefined;
+    if (id) {
+      if (platform === 'xiaohongshu') noteUrl = `https://www.xiaohongshu.com/explore/${id}`;
+      else if (platform === 'bilibili') noteUrl = `https://www.bilibili.com/video/${id}`;
+      else if (platform === 'douyin') noteUrl = `https://www.douyin.com/video/${id}`;
+      else if (platform === 'kuaishou') noteUrl = `https://www.kuaishou.com/short-video/${id}`;
+    }
+
+    const stat = archive.stat || archive.statistics || archive.interact_info || item.stat || item.statistics || item.interact_info || {};
+
+    const views = parseNumValue(
+      archive.read_count ?? archive.read_num ?? archive.view_count ?? archive.view_num ?? archive.views ?? archive.play_count ?? archive.playCount ?? archive.viewCount ?? archive.impressions ??
+      stat.view ?? stat.view_count ?? stat.read_count ?? stat.play_count ?? stat.views ?? stat.playCount ?? stat.viewCount ?? stat.show_count ??
+      item.read_count ?? item.view_count ?? item.play_count ?? item.viewCount ?? 0
+    );
+
+    const likes = parseNumValue(
+      archive.like_count ?? archive.like_num ?? archive.liked_count ?? archive.likes ?? archive.digg_count ?? archive.likeCount ??
+      stat.like ?? stat.like_count ?? stat.liked_count ?? stat.digg_count ?? stat.likes ?? stat.likeCount ?? stat.diggCount ??
+      item.like_count ?? item.liked_count ?? item.likeCount ?? 0
+    );
+
+    const comments = parseNumValue(
+      archive.comment_count ?? archive.comment_num ?? archive.comments ?? archive.reply ?? archive.reply_count ?? archive.commentCount ??
+      stat.reply ?? stat.comment ?? stat.comment_count ?? stat.comments ??
+      item.comment_count ?? item.commentCount ?? 0
+    );
+
+    const shares = parseNumValue(
+      archive.share_count ?? archive.share_num ?? archive.shares ?? archive.shareCount ??
+      stat.share ?? stat.share_count ?? stat.shares ??
+      item.share_count ?? item.shareCount ?? 0
+    );
+
+    const publishedAt = archive.ctime
+      ? new Date(archive.ctime * 1000).toISOString()
+      : typeof archive.publish_time === 'string'
+        ? archive.publish_time
+        : typeof archive.create_time === 'string'
+          ? archive.create_time
+          : undefined;
+
+    collector({
+      title: title.trim(),
+      views,
+      likes,
+      comments,
+      shares,
+      ...(noteUrl ? { url: noteUrl } : {}),
+      ...(publishedAt ? { publishedAt } : {}),
+    });
+  }
+
+  function findArrays(obj: any, depth = 0) {
+    if (!obj || depth > 4) return;
+    if (Array.isArray(obj)) {
+      for (const el of obj) {
+        if (el && typeof el === 'object') handleItem(el);
+      }
+      return;
+    }
+    if (typeof obj === 'object') {
+      for (const key of Object.keys(obj)) {
+        const val = obj[key];
+        if (Array.isArray(val)) {
+          for (const el of val) {
+            if (el && typeof el === 'object') handleItem(el);
+          }
+        } else if (typeof val === 'object' && val !== null) {
+          findArrays(val, depth + 1);
+        }
+      }
+    }
+  }
+
+  findArrays(json);
+}
+
 export class PublisherService {
   private readonly accounts = new Map<TargetPlatform, PlatformAccount>();
   private readonly contexts = new Map<TargetPlatform, BrowserContext>();
   private readonly busy = new Set<TargetPlatform>();
   private readonly pending = new Set<Promise<unknown>>();
   private closed = false;
+
   constructor(private readonly options: PublisherOptions, private readonly launcher: Pick<BrowserType, 'launchPersistentContext'> = chromium) {
     for (const platform of TARGET_PLATFORMS) this.accounts.set(platform, { platform, state: 'disconnected', checkedAt: null, windowOpen: false });
   }
+
   private validate(platform: unknown): asserts platform is TargetPlatform {
     if (!TARGET_PLATFORMS.includes(platform as TargetPlatform)) throw new PublisherError('INVALID_PLATFORM', '请选择受支持的平台。');
   }
+
   list(): PlatformAccount[] { return [...this.accounts.values()].map(account => ({ ...account })); }
+
   async load(): Promise<void> {
     try {
       const file = path.join(this.options.dataDirectory, 'profiles', 'accounts.json');
@@ -37,14 +159,18 @@ export class PublisherService {
       }
     } catch { /* Missing or unreadable state is disconnected, never inferred from profile presence. */ }
   }
+
   private emit(account: PlatformAccount): void {
     try { this.options.onAccount?.({ ...account }); } catch { /* Observers must not break account lifecycle or cleanup. */ }
   }
+
   private update(platform: TargetPlatform, state: AccountState): PlatformAccount {
     const account = { platform, state, checkedAt: state === 'connected' ? new Date().toISOString() : this.accounts.get(platform)?.checkedAt ?? null, windowOpen: this.contexts.has(platform) };
     this.accounts.set(platform, account); this.emit(account); return { ...account };
   }
+
   private async save(): Promise<void> { await atomicJson(path.join(this.options.dataDirectory, 'profiles', 'accounts.json'), this.list().map(account => ({ ...account, windowOpen: false, state: account.state === 'connecting' ? 'disconnected' : account.state }))); }
+
   private run<T>(platform: TargetPlatform, operation: () => Promise<T>): Promise<T> {
     this.validate(platform);
     if (this.closed) return Promise.reject(new PublisherError('CLOSED', '发布服务已关闭。'));
@@ -53,21 +179,49 @@ export class PublisherService {
     const pending = operation().finally(() => { this.busy.delete(platform); this.pending.delete(pending); });
     this.pending.add(pending); return pending;
   }
+
+  private async launchContext(directory: string, launchOptions: Parameters<BrowserType['launchPersistentContext']>[1]): Promise<BrowserContext> {
+    try {
+      return await this.launcher.launchPersistentContext(directory, launchOptions);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("Executable doesn't exist") || msg.includes('Failed to launch')) {
+        try {
+          return await this.launcher.launchPersistentContext(directory, { ...launchOptions, channel: 'chrome' });
+        } catch {
+          try {
+            return await this.launcher.launchPersistentContext(directory, { ...launchOptions, channel: 'msedge' });
+          } catch {
+            throw new PublisherError('BROWSER_UNAVAILABLE', '无法启动浏览器；请先运行 npm run setup:browser 或安装 Chrome/Edge。');
+          }
+        }
+      }
+      throw err;
+    }
+  }
+
   private async open(platform: TargetPlatform): Promise<{ context: BrowserContext; page: Page }> {
     const directory = path.join(this.options.dataDirectory, 'profiles', platform);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     if ((await lstat(directory)).isSymbolicLink()) throw new PublisherError('INVALID_PROFILE', '账号目录无效。');
     let context: BrowserContext;
-    try { context = await this.launcher.launchPersistentContext(directory, { headless: false, viewport: null, acceptDownloads: false, permissions: [], timeout: 30000 }); }
-    catch { throw new PublisherError('BROWSER_UNAVAILABLE', '无法启动 Chromium；请先运行 npm run setup:browser，并确认该账号目录未被占用。'); }
+    try {
+      context = await this.launchContext(directory, { headless: false, viewport: null, acceptDownloads: false, permissions: [], timeout: 30000 });
+    } catch (err) {
+      if (err instanceof PublisherError) throw err;
+      throw new PublisherError('BROWSER_UNAVAILABLE', '无法启动 Chromium；请先运行 npm run setup:browser，并确认该账号目录未被占用。');
+    }
     if (this.closed) { await context.close(); throw new PublisherError('CLOSED', '发布服务已关闭。'); }
     this.contexts.set(platform, context);
     context.on('close', () => { this.contexts.delete(platform); const previous = this.accounts.get(platform)!; this.accounts.set(platform, { ...previous, windowOpen: false }); this.emit({ ...previous, windowOpen: false }); });
-    context.setDefaultTimeout(this.options.fieldTimeoutMs ?? 20000);
+    if (typeof context.setDefaultTimeout === 'function') {
+      context.setDefaultTimeout(this.options.fieldTimeoutMs ?? 20000);
+    }
     const page = context.pages()[0] ?? await context.newPage();
     this.update(platform, 'connecting');
     return { context, page };
   }
+
   async isLoggedIn(platform: TargetPlatform, context: BrowserContext, page: Page): Promise<boolean> {
     if (page.isClosed() || !platformHost(platform, page.url())) return false;
     const adapter = PLATFORM_ADAPTERS[platform];
@@ -76,7 +230,6 @@ export class PublisherService {
       && platformHost(platform, `https://${cookie.domain.replace(/^\./, '')}`)).map(cookie => cookie.name)));
     const visible = async (): Promise<boolean> => {
       if (!creatorRoute(platform, page.url())) return false;
-      // Probe selectors concurrently; a stale selector must never delay a core-cookie success.
       return Promise.any(adapter.signedIn.map(async selector => {
         if (await page.locator(selector).first().isVisible()) return true;
         throw new Error('Not visible');
@@ -85,15 +238,13 @@ export class PublisherService {
     return Promise.any([
       credentials.then(names => { if (adapter.coreCookies.every(name => names.has(name))) return true; throw new Error('No core credentials'); }),
       Promise.all([credentials, visible()]).then(([names, signedIn]) => {
-        // Alternate session names need BOTH the actual creator route and creator DOM.
-        // Neither URL nor an avatar/login heading alone is proof of authentication.
         if (signedIn && adapter.cookies.some(name => names.has(name))) return true;
         throw new Error('No corroborated session');
       }),
     ]).catch(() => false);
   }
+
   private async authenticate(platform: TargetPlatform, context: BrowserContext, page: Page): Promise<void> {
-    // Login cookies can arrive while analytics/assets keep navigation pending. Start polling now.
     void page.goto(PLATFORM_ADAPTERS[platform].home, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
     const deadline = Date.now() + (this.options.loginTimeoutMs ?? 180000);
     while (Date.now() < deadline) {
@@ -103,13 +254,13 @@ export class PublisherService {
         this.isLoggedIn(platform, context, page),
         new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), Math.min(1000, Math.max(1, deadline - Date.now()))); }),
       ]).finally(() => { if (timer) clearTimeout(timer); });
-      // Closing a window during a probe must not emit a late Connected event.
       if (this.closed || page.isClosed() || !this.contexts.has(platform)) throw new PublisherError('LOGIN_CANCELLED', '登录窗口已关闭。');
       if (loggedIn) { this.update(platform, 'connected'); await this.save(); return; }
       await new Promise(resolve => setTimeout(resolve, Math.min(this.options.pollMs ?? 1000, Math.max(0, deadline - Date.now()))));
     }
     throw new PublisherError('LOGIN_TIMEOUT', '未检测到有效登录。请重新连接；如平台改版，请检查页面并更新适配器。');
   }
+
   connect(platform: TargetPlatform): Promise<PlatformAccount> {
     return this.run(platform, async () => {
       let context: BrowserContext | undefined;
@@ -124,6 +275,7 @@ export class PublisherService {
       }
     });
   }
+
   private async field(page: Page, platform: TargetPlatform, selectors: string[], action: (locator: Locator) => Promise<void>): Promise<boolean> {
     const deadline = Date.now() + (this.options.fieldTimeoutMs ?? 20000);
     do {
@@ -141,6 +293,7 @@ export class PublisherService {
     } while (Date.now() < deadline);
     return false;
   }
+
   publish(input: PublishInput): Promise<PublishResult> {
     return this.run(input.platform, async () => {
       const { platform } = input;
@@ -172,6 +325,236 @@ export class PublisherService {
       }
     });
   }
+
+  async scrapeCreatorMetrics(platform: TargetPlatform): Promise<ScrapedNoteMetric[]> {
+    this.validate(platform);
+    if (this.closed) throw new PublisherError('CLOSED', '发布服务已关闭。');
+
+    const account = this.accounts.get(platform);
+    if (!account || account.state !== 'connected') {
+      throw new PublisherError('AUTH_REQUIRED', `未登录 ${PLATFORM_ADAPTERS[platform].name} 账号，无法同步数据。`);
+    }
+
+    if (this.busy.has(platform)) {
+      throw new PublisherError('PROFILE_BUSY', `${PLATFORM_ADAPTERS[platform].name} 正在进行发布或操作，请稍候再试。`);
+    }
+
+    const adapter = PLATFORM_ADAPTERS[platform];
+    const directory = path.join(this.options.dataDirectory, 'profiles', platform);
+
+    let context = this.contexts.get(platform);
+    let isTemporary = false;
+
+    if (!context) {
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      if ((await lstat(directory)).isSymbolicLink()) throw new PublisherError('INVALID_PROFILE', '账号目录无效。');
+
+      const launchOptions = {
+        headless: true,
+        args: [
+          '--disable-blink-features=AutomationControlled',
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-infobars',
+        ],
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        timeout: 25000,
+      };
+
+      try {
+        context = await this.launchContext(directory, launchOptions);
+        isTemporary = true;
+      } catch (err) {
+        if (err instanceof PublisherError) throw err;
+        throw new PublisherError('BROWSER_UNAVAILABLE', `无法启动浏览器同步 ${adapter.name} 数据：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const scrapedList: ScrapedNoteMetric[] = [];
+    const seenTitles = new Set<string>();
+
+    const addScraped = (note: ScrapedNoteMetric) => {
+      if (!note.title) return;
+      const key = note.title.trim().toLowerCase();
+      if (!seenTitles.has(key)) {
+        seenTitles.add(key);
+        scrapedList.push(note);
+      } else {
+        const existing = scrapedList.find(s => s.title.trim().toLowerCase() === key);
+        if (existing) {
+          existing.views = Math.max(existing.views, note.views);
+          existing.likes = Math.max(existing.likes, note.likes);
+          existing.comments = Math.max(existing.comments, note.comments);
+          existing.shares = Math.max(existing.shares, note.shares);
+          if (note.url && !existing.url) existing.url = note.url;
+        }
+      }
+    };
+
+    let page: Page | undefined;
+    try {
+      page = await context.newPage();
+      if (typeof page.setDefaultTimeout === 'function') {
+        page.setDefaultTimeout(this.options.fieldTimeoutMs ?? 15000);
+      }
+
+      if (typeof page.on === 'function') {
+        page.on('response', async (res) => {
+          try {
+            const u = res.url();
+            const ct = (res.headers && res.headers()['content-type']) || '';
+            if (!ct.includes('json') && !ct.includes('javascript') && !ct.includes('text/plain')) return;
+            if (
+              u.includes('note') ||
+              u.includes('creator') ||
+              u.includes('article') ||
+              u.includes('archives') ||
+              u.includes('item/list') ||
+              u.includes('works') ||
+              u.includes('video/list') ||
+              u.includes('galaxy') || u.includes('aweme') || u.includes('rest/cp') || u.includes('manage') || u.includes('item_list')
+            ) {
+              const bodyText = await res.text().catch(() => '');
+              if (!bodyText || bodyText.length > 3 * 1024 * 1024) return;
+              const data = JSON.parse(bodyText);
+              parseApiResponse(platform, u, data, addScraped);
+            }
+          } catch {
+            // ignore JSON parse or read errors
+          }
+        });
+      }
+
+      await page.goto(adapter.manage, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+      await new Promise(r => setTimeout(r, 2000));
+      if (typeof page.evaluate === 'function') {
+        await page.evaluate(() => {
+          try { (globalThis as any).window?.scrollBy(0, 600); } catch {}
+        }).catch(() => {});
+      }
+      await new Promise(r => setTimeout(r, 2500));
+
+      if (platform === 'bilibili' && scrapedList.length === 0 && typeof page.evaluate === 'function') {
+        try {
+          const biliData = await page.evaluate(async () => {
+            try {
+              const r = await (globalThis as any).fetch('https://member.bilibili.com/x/web/archives?status=is_pubing%2Cpubed%2Cnot_pubed&pn=1&ps=20', { credentials: 'include' });
+              return await r.json();
+            } catch { return null; }
+          });
+          if (biliData) {
+            parseApiResponse(platform, 'member.bilibili.com/x/web/archives', biliData, addScraped);
+          }
+        } catch {}
+      }
+
+      if (typeof page.evaluate === 'function') {
+        try {
+          const domItems = await page.evaluate(() => {
+            const win = globalThis as unknown as { document?: { querySelectorAll: (s: string) => any[] } };
+            const doc = typeof (globalThis as any).document !== 'undefined' ? (globalThis as any).document : win.document;
+            if (!doc) return [];
+            const items: Array<{ title: string; views: number; likes: number; comments: number; shares: number; url?: string }> = [];
+            function parseNum(str: string): number {
+              if (!str) return 0;
+              const s = str.replace(/,/g, '').trim();
+              const wMatch = s.match(/([\d.]+)\s*[wW万]/);
+              if (wMatch && wMatch[1]) return Math.round(parseFloat(wMatch[1]) * 10000);
+              const kMatch = s.match(/([\d.]+)\s*[kK]/);
+              if (kMatch && kMatch[1]) return Math.round(parseFloat(kMatch[1]) * 1000);
+              const numMatch = s.match(/\d+/);
+              return numMatch && numMatch[0] ? parseInt(numMatch[0], 10) : 0;
+            }
+
+            const rows = doc.querySelectorAll(
+              'tbody tr, [class*="note-card"], [class*="noteCard"], [class*="note-item"], [class*="noteItem"], [class*="content-item"], [class*="item-card"], [class*="work-item"], [class*="video-item"], [class*="article-item"]'
+            );
+
+            for (const r of Array.from(rows)) {
+              const row = r as { innerText?: string; querySelector?: (s: string) => any };
+              const rowText = row.innerText || '';
+              if (rowText.length < 4 || !row.querySelector) continue;
+
+              const titleEl = row.querySelector('[class*="title"], [class*="Title"], [class*="caption"], h3, h4, a[title]');
+              const title = (titleEl?.getAttribute?.('title') || titleEl?.textContent || '').trim();
+              if (!title) return;
+
+              const linkEl = row.querySelector('a[href*="/explore/"], a[href*="/video/"], a[href*="bilibili.com/video"], a[href*="kuaishou.com/short-video"]');
+              const url = linkEl?.href ? String(linkEl.href) : undefined;
+
+              let views = 0, likes = 0, comments = 0, shares = 0;
+              const vMatch = rowText.match(/(?:播放|阅读|观看|展现)[^\d]*([\d.,]+[wWkK万]?)/);
+              if (vMatch && vMatch[1]) views = parseNum(vMatch[1]);
+
+              const lMatch = rowText.match(/(?:点赞|获赞|赞)[^\d]*([\d.,]+[wWkK万]?)/);
+              if (lMatch && lMatch[1]) likes = parseNum(lMatch[1]);
+
+              const cMatch = rowText.match(/(?:评论|留言)[^\d]*([\d.,]+[wWkK万]?)/);
+              if (cMatch && cMatch[1]) comments = parseNum(cMatch[1]);
+
+              const sMatch = rowText.match(/(?:分享|转发)[^\d]*([\d.,]+[wWkK万]?)/);
+              if (sMatch && sMatch[1]) shares = parseNum(sMatch[1]);
+
+              items.push({ title, views, likes, comments, shares, ...(url ? { url } : {}) });
+            }
+            return items;
+          });
+
+          if (Array.isArray(domItems)) {
+            for (const item of domItems) {
+              addScraped(item);
+            }
+          }
+        } catch {
+          // DOM fallback safe
+        }
+      }
+    } finally {
+      if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
+        await page.close().catch(() => {});
+      }
+      if (isTemporary && context) {
+        await context.close().catch(() => {});
+      }
+    }
+
+    return scrapedList;
+  }
+
+  async syncMetrics(dataDirectory: string, targetPlatform?: TargetPlatform): Promise<SyncMetricsResult> {
+    const targets: TargetPlatform[] = targetPlatform ? [targetPlatform] : [...TARGET_PLATFORMS];
+    const accounts = this.list();
+    const connected = accounts.filter(a => a.state === 'connected').map(a => a.platform);
+    const toSync = targets.filter(p => connected.includes(p));
+
+    if (!toSync.length) {
+      if (targetPlatform) {
+        throw new PublisherError('AUTH_REQUIRED', `${PLATFORM_ADAPTERS[targetPlatform].name} 尚未登录，请先在“平台账号管理”中完成登录。`);
+      }
+      throw new PublisherError('NO_CONNECTED_PLATFORMS', '尚未登录任何平台账号，请先在“平台账号管理”中完成登录。');
+    }
+
+    const succeeded: TargetPlatform[] = [];
+    const failed: Array<{ platform: TargetPlatform; error: string }> = [];
+    let totalUpdated = 0;
+
+    for (const plat of toSync) {
+      try {
+        const scraped = await this.scrapeCreatorMetrics(plat);
+        const { updatedCount } = await syncPlatformMetrics(dataDirectory, plat, scraped);
+        totalUpdated += updatedCount;
+        succeeded.push(plat);
+      } catch (err: unknown) {
+        failed.push({
+          platform: plat,
+          error: err instanceof Error ? err.message : '数据探测失败',
+        });
+      }
+    }
+
+    return { succeeded, failed, updatedCount: totalUpdated };
+  }
+
   async closePlatform(platform: TargetPlatform): Promise<void> { this.validate(platform); await this.contexts.get(platform)?.close(); }
   async close(): Promise<void> { this.closed = true; await Promise.allSettled([...this.contexts.values()].map(context => context.close())); await Promise.allSettled([...this.pending]); }
 }

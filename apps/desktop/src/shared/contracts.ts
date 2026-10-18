@@ -1,6 +1,7 @@
 import type { ManualInput } from '../../../../packages/core/src/fetcher/types.js';
-import type { PlatformAccount, PublishResult } from '../../../../packages/core/src/publisher/publisher.js';
-export type { PlatformAccount, PublishResult };
+import type { PlatformAccount, PublishResult, SyncMetricsResult } from '../../../../packages/core/src/publisher/publisher.js';
+export type { PlatformAccount, PublishResult, SyncMetricsResult };
+export interface BatchPublishResult { succeeded: TargetPlatform[]; failed: Array<{ platform: TargetPlatform; error: string }>; }
 export interface ManualDraft extends ManualInput { sourceTaskId?: string }
 export interface MediaSelection { path: string; name: string }
 import type { AIProtocol } from '../../../../packages/core/src/rewriter/types.js';
@@ -39,6 +40,7 @@ export interface ElectronAPI {
   connectPlatform(platform: TargetPlatform): Promise<Reply<PlatformAccount>>;
   closePlatform(platform: TargetPlatform): Promise<Reply<void>>;
   publish(taskId: string, platform: TargetPlatform): Promise<Reply<PublishResult>>;
+  publishAll(taskId: string, platforms?: TargetPlatform[]): Promise<Reply<BatchPublishResult>>;
   onAccount(listener: (account: PlatformAccount) => void): () => void;
   fetchModels(settings: SettingsInput['ai']): Promise<Reply<string[]>>;
   studioSettings(): Promise<Reply<StudioSettings>>;
@@ -49,6 +51,7 @@ export interface ElectronAPI {
   processMedia(taskId: string): Promise<Reply<ProcessedDocument>>;
   cancelStudio(taskId: string, kind: 'rewrite' | 'process'): Promise<Reply<void>>;
   analytics(): Promise<Reply<AnalyticsSnapshot>>;
+  syncMetrics(platform?: TargetPlatform): Promise<Reply<SyncMetricsResult>>;
   onStudio(listener: (event: StudioEvent) => void): () => void;
   snapshot(): Promise<Reply<Snapshot>>;
   fetchMetadata(url: string): Promise<Reply<DownloadTask>>;
