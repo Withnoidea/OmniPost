@@ -20,6 +20,7 @@ export type { DownloadTask, TaskState, VideoMetadata } from '../../../../package
 export interface DesktopFailure { code: string; message: string }
 export type Reply<T> = { ok: true; value: T } | { ok: false; error: DesktopFailure };
 export interface ProxySettings { enabled: boolean; url: string; persisted: boolean }
+export interface ProxyTestResult { ok: boolean; latencyMs: number; error?: string }
 export interface Snapshot { tasks: DownloadTask[]; proxy: ProxySettings; version: string; dataDirectory: string }
 export interface TaskAssets {
   cover: string | null;
@@ -41,7 +42,7 @@ export interface ElectronAPI {
   studioSettings(): Promise<Reply<StudioSettings>>;
   saveStudioSettings(settings: SettingsInput): Promise<Reply<StudioSettings>>;
   library(taskId: string): Promise<Reply<TaskLibrary>>;
-  rewrite(taskId: string, platforms: TargetPlatform[]): Promise<Reply<RewriteTaskResult>>;
+  rewrite(taskId: string, platforms: TargetPlatform[], mode?: 'missing' | 'replace'): Promise<Reply<RewriteTaskResult>>;
   saveCopy(taskId: string, platform: TargetPlatform, copy: LocalizedCopy, revision: string): Promise<Reply<RewrittenDocument>>;
   processMedia(taskId: string): Promise<Reply<ProcessedDocument>>;
   cancelStudio(taskId: string, kind: 'rewrite' | 'process'): Promise<Reply<void>>;
@@ -49,11 +50,13 @@ export interface ElectronAPI {
   onStudio(listener: (event: StudioEvent) => void): () => void;
   snapshot(): Promise<Reply<Snapshot>>;
   fetchMetadata(url: string): Promise<Reply<DownloadTask>>;
+  download(url: string): Promise<Reply<DownloadTask>>;
   selectAndAttach(taskId: string): Promise<Reply<DownloadTask | null>>;
   attachDroppedFile(taskId: string, file: File): Promise<Reply<DownloadTask>>;
   assets(taskId: string): Promise<Reply<TaskAssets>>;
   cancel(taskId: string): Promise<Reply<void>>;
   setProxy(settings: Pick<ProxySettings, 'enabled' | 'url'>): Promise<Reply<ProxySettings>>;
+  testProxy(url: string): Promise<Reply<ProxyTestResult>>;
   openAssets(taskId: string): Promise<Reply<void>>;
   copyText(text: string): Promise<Reply<void>>;
   windowControl(action: 'minimize' | 'maximize' | 'close'): Promise<Reply<void>>;

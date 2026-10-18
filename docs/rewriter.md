@@ -187,3 +187,9 @@ npm run rewrite -- '<taskId>' --platform xhs,bili --base-url 'http://localhost:1
 - `PlatformRewrite.usage`：可选的 `promptTokens / completionTokens / totalTokens`，只记录 API 实际返回的合法整数，不估算。
 - `.operations/<id>.json`：每次尝试先记录 started，然后写成功或失败；截断/无效输出也保留已返回的 usage，意外中断保留未完成标记。旧项目无操作记录时不回填虚构历史。
 - 桌面端 `onProgress` 显示平台与完成数量，不模拟 token 流；实际内容仍在逐平台提交后保留。
+
+### 增量补齐与覆盖保护
+
+- `rewriteTask` / `rewriteMultiPlatform` 可传 `skipExisting: true`，在写入锁内重新检查并跳过已有平台，包括人工保存的微调。全部存在时不调用模型、不改写文件。
+- 默认 `skipExisting: false` 保留 CLI / 单平台显式重生成语义。桌面「改写全部平台」默认增量补齐；全部已有文案时必须确认「将覆盖现有所有平台文案」。未保存草稿不会被增量动作覆盖。
+- `requestedPlatforms` 与进度事件的 `total` 只计本次实际请求的平台；每个平台独立原子保存，部分失败后再次补齐仅重试缺失项。覆盖模式下失败平台保留上次成功文案。

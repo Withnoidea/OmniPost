@@ -160,7 +160,8 @@ export class StudioService {
 
   }
 
-  async rewrite(task: DownloadTask, input: unknown) {
+  async rewrite(task: DownloadTask, input: unknown, mode: unknown = 'replace') {
+    if (mode !== 'replace' && mode !== 'missing') throw new DesktopError('INVALID_INPUT', '未知改写模式。');
 
     if (!Array.isArray(input) || input.length < 1 || input.length > 4) throw new DesktopError('INVALID_PLATFORM', '请选择目标平台。');
 
@@ -172,7 +173,7 @@ export class StudioService {
 
     const options = { ...this.settings.ai, apiKey: this.apiKey, headers: this.headers };
 
-    return this.job(task.id, 'rewrite', signal => this.writer.rewriteMultiPlatform(manifest, input as TargetPlatform[], { ...options, signal }));
+    return this.job(task.id, 'rewrite', signal => this.writer.rewriteMultiPlatform(manifest, input as TargetPlatform[], { ...options, skipExisting: mode === 'missing', signal }));
 
   }
 

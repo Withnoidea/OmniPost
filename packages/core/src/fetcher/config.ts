@@ -24,6 +24,33 @@ export function normalizeSource(input: string): { url: string; platform: Platfor
   if (host === 'www.tiktok.com' && /^\/t\/[A-Za-z0-9]+\/?$/.test(url.pathname)) {
     return { url: `https://${host}${url.pathname}`, platform: 'tiktok' };
   }
+  if (['v.douyin.com', 'douyin.com', 'www.douyin.com', 'iesdouyin.com'].includes(host)) {
+    if (host === 'v.douyin.com') {
+      if (!/^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) throw new FetcherError('INVALID_URL');
+      return { url: `https://v.douyin.com${url.pathname}`, platform: 'douyin' };
+    }
+    const id = /^\/(?:video|note|share\/video)\/(\d+)\/?$/.exec(url.pathname)?.[1] || url.searchParams.get('modal_id');
+    if (!id || !/^\d{15,25}$/.test(id)) throw new FetcherError('INVALID_URL');
+    return { url: `https://www.douyin.com/video/${id}`, platform: 'douyin' };
+  }
+  if (['bilibili.com', 'www.bilibili.com', 'm.bilibili.com', 'b23.tv'].includes(host)) {
+    if (host === 'b23.tv') {
+      if (!/^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) throw new FetcherError('INVALID_URL');
+      return { url: `https://b23.tv${url.pathname}`, platform: 'bilibili' };
+    }
+    const match = /^\/video\/(BV[a-zA-Z0-9]{10}|av\d+)\/?$/i.exec(url.pathname);
+    if (!match) throw new FetcherError('INVALID_URL');
+    return { url: `https://www.bilibili.com/video/${match[1]}`, platform: 'bilibili' };
+  }
+  if (['kuaishou.com', 'www.kuaishou.com', 'v.kuaishou.com'].includes(host)) {
+    if (host === 'v.kuaishou.com') {
+      if (!/^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) throw new FetcherError('INVALID_URL');
+      return { url: `https://v.kuaishou.com${url.pathname}`, platform: 'kuaishou' };
+    }
+    const id = /^\/(?:short-video|video|photo)\/([A-Za-z0-9_-]+)\/?$/.exec(url.pathname)?.[1];
+    if (!id) throw new FetcherError('INVALID_URL');
+    return { url: `https://www.kuaishou.com/short-video/${id}`, platform: 'kuaishou' };
+  }
   throw new FetcherError('INVALID_URL');
 }
 

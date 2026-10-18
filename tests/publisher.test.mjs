@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PublisherService } from '../dist/packages/core/src/publisher/publisher.js';
-import { PLATFORM_ADAPTERS } from '../dist/packages/core/src/publisher/platforms.js';
+import { PLATFORM_ADAPTERS, creatorRoute } from '../dist/packages/core/src/publisher/platforms.js';
 import { TARGET_PLATFORMS } from '../dist/packages/core/src/rewriter/types.js';
 
 async function fixture(t, overrides = {}) {
@@ -18,17 +18,17 @@ async function fixture(t, overrides = {}) {
     const platform = path.basename(directory); const adapter = PLATFORM_ADAPTERS[platform];
     const context = new EventEmitter(); let current = 'about:blank'; let closed = false;
     context.setDefaultTimeout = () => {};
-    context.cookies = async () => overrides.cookies ?? [{ name: adapter.cookies[0], value: 'private-session', domain: '.' + adapter.hosts[0], expires: -1 }];
+    context.cookies = async () => { if (overrides.cookieProbe) return overrides.cookieProbe(); return overrides.cookies ?? adapter.coreCookies.map(name => ({ name, value: 'private-session', domain: '.' + adapter.hosts[0], expires: -1 })); };
     const locator = selector => ({
       first() { return this; },
-      async isVisible() { return !overrides.noLogin && adapter.signedIn.includes(selector); },
+      async isVisible() { if (overrides.stalledDOM) return new Promise(() => {}); return !overrides.noLogin && (overrides.visibleSelector ? selector === overrides.visibleSelector : adapter.signedIn.includes(selector)); },
       async count() { return overrides.missingFields ? 0 : 1; },
       async setInputFiles(file) { writes.push({ platform, kind: 'video', file }); },
       async fill(text) { writes.push({ platform, kind: 'text', selector, text }); },
       async click() { throw new Error('Final submit/click is forbidden'); },
     });
     const page = { url: () => current, isClosed: () => closed, locator, frames() { return [this]; },
-      async goto(url) { current = overrides.redirect && url === adapter.upload ? 'https://attacker.test/' : url; if (overrides.closeOnNavigate) await context.close(); },
+      async goto(url) { current = overrides.loginURL ?? (overrides.redirect && url === adapter.upload ? 'https://attacker.test/' : url); if (overrides.closeOnNavigate) await context.close(); if (overrides.stalledNavigation) return new Promise(() => {}); },
     };
     context.pages = () => [page]; context.newPage = async () => page;
     context.close = async () => { if (!closed) { closed = true; context.emit('close'); } };
@@ -62,8 +62,8 @@ for (const platform of TARGET_PLATFORMS) {
     await service.closePlatform(platform); assert.equal(contexts[0].pages()[0].isClosed(), true);
   });
 }
-test('cookies alone, generic profile files or expired login cannot create Connected state', async t => {
-  const { service, launches } = await fixture(t, { noLogin: true });
+test('creator URL and generic DOM without credentials cannot create Connected state', async t => {
+  const { service, launches } = await fixture(t, { noLogin: true, cookies: [] });
   await assert.rejects(service.connect('douyin'), { code: 'LOGIN_TIMEOUT' });
   assert.equal(service.list().find(account => account.platform === 'douyin').state, 'disconnected'); assert.equal(launches.length, 1);
 });
@@ -94,7 +94,7 @@ test('concurrent platform directories are isolated; same-platform login excludes
   assert.throws(() => service.connect('../escape'), { code: 'INVALID_PLATFORM' });
 });
 test('shutdown closes browser contexts and settles active login without delayed Connected events', async t => {
-  const { service, contexts } = await fixture(t, { noLogin: true });
+  const { service, contexts } = await fixture(t, { noLogin: true, cookies: [] });
   const pending = service.connect('douyin'); const settled = assert.rejects(pending, error => ['CLOSED', 'LOGIN_CANCELLED'].includes(error.code));
   await service.close(); await settled;
   assert.ok(contexts.every(context => context.pages()[0].isClosed()));
@@ -107,4 +107,56 @@ test('account observer errors cannot interrupt login or browser cleanup', async 
   assert.equal(connected.state, 'connected');
   assert.equal(connected.windowOpen, false);
   assert.equal(contexts[0].pages()[0].isClosed(), true);
+});
+
+for (const platform of TARGET_PLATFORMS) {
+  test(`${platform}: core cookies authenticate without DOM even while navigation is pending`, async t => {
+    const { service, accounts, contexts, root } = await fixture(t, { noLogin: true, stalledDOM: true, stalledNavigation: true });
+    const result = await service.connect(platform);
+    assert.equal(result.state, 'connected'); assert.equal(result.windowOpen, false);
+    assert.equal(contexts[0].pages()[0].isClosed(), true);
+    assert.equal(accounts.at(-1).state, 'connected'); assert.equal(accounts.at(-1).windowOpen, false);
+    assert.ok(JSON.parse(await readFile(path.join(root, 'profiles', 'accounts.json'), 'utf8')).some(a => a.platform === platform && a.state === 'connected'));
+  });
+}
+test('Bilibili core login requires both DedeUserID and SESSDATA when creator DOM has drifted', async t => {
+  for (const name of ['DedeUserID', 'SESSDATA']) {
+    const { service } = await fixture(t, { noLogin: true, cookies: [{ name, value: 'partial', domain: '.bilibili.com', expires: -1 }] });
+    await assert.rejects(service.connect('bilibili'), { code: 'LOGIN_TIMEOUT' });
+  }
+});
+test('Bilibili creator avatar plus creator route corroborates an alternate session cookie', async t => {
+  const { service } = await fixture(t, { visibleSelector: '[class*="avatar"]', cookies: [{ name: 'SESSDATA', value: 'session', domain: '.bilibili.com', expires: -1 }] });
+  assert.equal((await service.connect('bilibili')).state, 'connected');
+});
+test('creator route matching is exact and logged-out pages cannot pass fallback', async t => {
+  assert.equal(creatorRoute('bilibili', 'https://member.bilibili.com/platform/home'), true);
+  for (const url of ['https://www.bilibili.com/platform/home', 'https://member.bilibili.com.attacker.test/platform', 'https://member.bilibili.com/platform/login', 'https://member.bilibili.com/platform#login']) assert.equal(creatorRoute('bilibili', url), false);
+  const { service } = await fixture(t, { loginURL: 'https://passport.bilibili.com/login', cookies: [{ name: 'SESSDATA', value: 'partial', domain: '.bilibili.com', expires: -1 }] });
+  await assert.rejects(service.connect('bilibili'), { code: 'LOGIN_TIMEOUT' });
+});
+test('core cookies are scoped, nonempty and unexpired; no URL-only fallback', async t => {
+  for (const cookies of [[], [{ name: 'passToken', value: 'x', domain: '.attacker.test', expires: -1 }], [{ name: 'passToken', value: 'x', domain: '.kuaishou.com', expires: 1 }], [{ name: 'passToken', value: ' ', domain: '.kuaishou.com', expires: -1 }]]) {
+    const { service } = await fixture(t, { cookies });
+    await assert.rejects(service.connect('kuaishou'), { code: 'LOGIN_TIMEOUT' });
+  }
+});
+test('closing during cookie detection never emits a late connected notification', async t => {
+  let resolveCookies; let started;
+  const checking = new Promise(resolve => { started = resolve; });
+  const { service, accounts } = await fixture(t, { noLogin: true, cookieProbe: () => new Promise(resolve => { resolveCookies = resolve; started(); }) });
+  const result = service.connect('douyin'); const rejected = assert.rejects(result, { code: 'LOGIN_CANCELLED' });
+  await checking; await service.closePlatform('douyin');
+  resolveCookies([{ name: 'sessionid', value: 'valid', domain: '.douyin.com', expires: -1 }]);
+  await rejected;
+  assert.ok(!accounts.some(a => a.state === 'connected'));
+});
+
+
+test('unresponsive cookie/DOM probes are bounded and release the login window', { timeout: 2000 }, async t => {
+  const { service, accounts, contexts } = await fixture(t, { cookieProbe: () => new Promise(() => {}), stalledDOM: true, stalledNavigation: true });
+  await assert.rejects(service.connect('bilibili'), { code: 'LOGIN_TIMEOUT' });
+  assert.equal(contexts[0].pages()[0].isClosed(), true);
+  assert.equal(accounts.at(-1).state, 'disconnected');
+  assert.equal(accounts.at(-1).windowOpen, false);
 });

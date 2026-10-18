@@ -54,7 +54,7 @@ export class AIRewriter {
   async rewriteTask(taskId: string, targetPlatforms: TargetPlatform[], options: RewriteOptions = {}): Promise<RewriteTaskResult> {
     if (!Array.isArray(targetPlatforms) || targetPlatforms.length === 0 || targetPlatforms.length > 16) throw new RewriterError('INVALID_PLATFORM');
     targetPlatforms.forEach(validatePlatform);
-    const platforms = [...new Set(targetPlatforms)];
+    const requested = [...new Set(targetPlatforms)];
     const config = resolveRewriteOptions({ ...this.options, ...options });
     checkCancelled(config.signal);
     const directory = await this.store.directory(taskId);
@@ -62,6 +62,7 @@ export class AIRewriter {
     try {
       const source = await this.store.source(directory, taskId);
       let document = await this.store.load(directory, taskId, source.sha256);
+      const platforms = requested.filter(platform => !(options.skipExisting ?? this.options.skipExisting) || !document?.platforms[platform]);
       const outcome: RewriteTaskResult = { taskId, state: 'failed', requestedPlatforms: platforms, errors: {} };
       let saved = 0;
       let completed = 0;

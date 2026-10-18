@@ -17,7 +17,8 @@ import { FetcherError } from '../../../../packages/core/src/fetcher/errors.js';
 import { runProcess } from '../../../../packages/core/src/fetcher/process.js';
 import { atomicJson, isRecord } from '../../../../packages/core/src/fetcher/store.js';
 import type { DownloadTask } from '../../../../packages/core/src/fetcher/types.js';
-import type { ProxySettings, Reply, TaskAssets } from '../shared/contracts.js';
+import type { ProxySettings, ProxyTestResult, Reply, TaskAssets } from '../shared/contracts.js';
+import type { TargetPlatform } from '../../../../packages/core/src/rewriter/types.js';
 import { assetPath, DesktopError, imageMime, taskId, text } from './security.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -91,6 +92,41 @@ async function saveProxy(input: unknown): Promise<ProxySettings> {
   await atomicJson(settingsFile, encrypted ? { enabled: input.enabled, encrypted } : { enabled: persisted && input.enabled, url: persisted ? url : '' });
   proxy = { enabled: input.enabled, url, persisted };
   return proxy;
+}
+async function testProxy(input: unknown): Promise<ProxyTestResult> {
+  const url = typeof input === 'string' ? input.trim() : '';
+  if (!url) throw new DesktopError('INVALID_PROXY', '请填写代理地址。');
+  const normalized = normalizeProxy(url);
+  const start = Date.now();
+  const testSession = session.fromPartition(`proxy-test-${Date.now()}-${Math.random()}`);
+  try {
+    await testSession.setProxy({ proxyRules: normalized });
+    const res = await testSession.fetch('https://www.youtube.com', {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(5000),
+    });
+    const latencyMs = Date.now() - start;
+    if (res.status >= 200 && res.status < 500) {
+      return { ok: true, latencyMs };
+    }
+    return { ok: false, latencyMs, error: `HTTP ${res.status}` };
+  } catch (error: any) {
+    const latencyMs = Date.now() - start;
+    const msg = String(error?.code || error?.message || error || 'CONNECT_FAILED');
+    if (msg.includes('ERR_CONNECTION_REFUSED') || msg.includes('ECONNREFUSED')) {
+      return { ok: false, latencyMs, error: 'ECONNREFUSED (代理端口未开启或拒绝连接)' };
+    }
+    if (msg.includes('ERR_TIMED_OUT') || msg.includes('ETIMEDOUT') || msg.includes('TimeoutError') || msg.includes('ABORT_ERR') || error?.name === 'TimeoutError') {
+      return { ok: false, latencyMs, error: 'ETIMEDOUT (请求超时，请检查代理是否畅通)' };
+    }
+    if (msg.includes('ERR_PROXY_CONNECTION_FAILED')) {
+      return { ok: false, latencyMs, error: 'ERR_PROXY_CONNECTION_FAILED (代理连接失败)' };
+    }
+    return { ok: false, latencyMs, error: msg };
+  } finally {
+    void testSession.clearStorageData().catch(() => {});
+  }
 }
 async function assets(input: unknown): Promise<TaskAssets> {
   const task = getTask(input);
@@ -174,21 +210,36 @@ function registerIPC(): void {
     if (!task.asset || !['READY', 'completed'].includes(task.state)) throw new DesktopError('ASSET_NOT_READY', '请先挂载视频，使素材进入 READY 状态。');
     const library = await studio.library(task);
     if (library.active.length) throw new DesktopError('BUSY', '请等待文案或视频处理完成。');
-    const copy = library.rewritten?.platforms[platform];
-    if (!copy || !library.processed) throw new DesktopError('PUBLISH_NOT_READY', '请先生成该平台文案，并完成 FFmpeg 视频处理。');
-    return publisher.publish({ platform, copy, videoPath: await assetPath(engine().getAssetDirectory(task.id), library.processed.video.file) });
+    const platformLabels: Record<TargetPlatform, string> = {
+      xiaohongshu: '小红书',
+      bilibili: '哔哩哔哩',
+      douyin: '抖音',
+      kuaishou: '快手',
+    };
+    const copy = library.rewritten?.platforms[platform as TargetPlatform];
+    const platformLabel = platformLabels[platform as TargetPlatform] ?? platform;
+    if (!copy || !copy.title?.trim()) {
+      throw new DesktopError('PUBLISH_NOT_READY', `请先生成 ${platformLabel} 平台文案`);
+    }
+    const videoFile = library.processed?.video?.file ?? task.asset.video?.file;
+    if (!videoFile) {
+      throw new DesktopError('ASSET_NOT_FOUND', '未找到可用视频文件');
+    }
+    return publisher.publish({ platform: platform as TargetPlatform, copy, videoPath: await assetPath(engine().getAssetDirectory(task.id), videoFile) });
   });
   handle('omni:studio-settings', () => studio.publicSettings());
   handle('omni:save-studio-settings', input => studio.save(input));
   handle('omni:library', id => studio.library(getTask(id)));
-  handle('omni:rewrite', (id, platforms) => studio.rewrite(getTask(id), platforms));
+  handle('omni:rewrite', (id, platforms, mode) => studio.rewrite(getTask(id), platforms, mode));
   handle('omni:save-copy', (id, platform, copy, revision) => studio.edit(getTask(id), platform, copy, revision));
   handle('omni:process', id => studio.process(getTask(id)));
   handle('omni:cancel-studio', (id, kind) => studio.cancel(getTask(id).id, kind));
   handle('omni:analytics', () => collectAnalytics(dataDirectory, engine().listTasks()));
   handle('omni:snapshot', () => ({ tasks: engine().listTasks(), proxy, version: app.getVersion(), dataDirectory }));
   handle('omni:fetch', (url) => engine().fetchMetadata(text(url), { proxy: proxy.enabled ? proxy.url : '' }));
+  handle('omni:download', (url) => engine().download(text(url), { proxy: proxy.enabled ? proxy.url : '' }));
   handle('omni:proxy', saveProxy);
+  handle('omni:test-proxy', input => testProxy(input));
   handle('omni:assets', assets);
   handle('omni:attach', attach);
   handle('omni:select-attach', async (id) => {

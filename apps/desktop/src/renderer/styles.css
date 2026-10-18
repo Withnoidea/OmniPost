@@ -548,3 +548,7 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); }
 .account-card p { display:flex; align-items:center; gap:6px; }
 .account-card small { line-height:1.7; }
 .account-card footer { flex-wrap:wrap; gap:8px; }
+
+.rewrite-confirm { margin: 0 24px 16px; }
+.rewrite-confirm p { margin: 6px 0 12px; }
+.platform-save-state { display: inline-flex; align-items: center; font-size: 10px; color: var(--text-secondary); }

@@ -4,7 +4,7 @@ import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
 import { FetcherError, throwIfAborted } from './errors.js';
 import { atomicJson, describeFile, isRecord } from './store.js';
-import { normalizeMetadata, verifyVideo } from './downloader.js';
+import { captureVideoFrame, normalizeMetadata, verifyVideo, type VideoProbeResult } from './downloader.js';
 import type { ProcessRunner } from './process.js';
 import type { AssetManifest, DownloadTask, ManualInput, MetadataManifest, PortableTools } from './types.js';
 
@@ -35,6 +35,7 @@ async function copyLocal(source: string, target: string, extensions: string[], l
 }
 export async function prepareManual(task: DownloadTask, input: ManualInput, directory: string, tools: PortableTools, runner: ProcessRunner, signal: AbortSignal): Promise<MetadataManifest | AssetManifest> {
   let cover = 'cover.png';
+  let hasCover = false;
   if (input.coverPath) {
     cover = path.extname(input.coverPath).toLowerCase() === '.png' ? 'cover.png' : 'cover.jpg';
     await copyLocal(input.coverPath, path.join(directory, cover), ['.jpg', '.jpeg', '.png'], 16 * 1024 * 1024, signal);
@@ -42,17 +43,48 @@ export async function prepareManual(task: DownloadTask, input: ManualInput, dire
     const png = bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
     const jpg = bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
     if (!(cover.endsWith('.png') ? png : jpg)) throw new FetcherError('INVALID_MEDIA');
-  } else {
+    hasCover = true;
+  }
+
+  let probeResult: VideoProbeResult | undefined;
+  if (input.videoPath) {
+    await copyLocal(input.videoPath, path.join(directory, 'media.mp4'), ['.mp4'], Number.MAX_SAFE_INTEGER, signal);
+    probeResult = await verifyVideo(directory, 'media.mp4', tools, runner, signal, true);
+    if (!hasCover) {
+      const captured = await captureVideoFrame(path.join(directory, 'media.mp4'), path.join(directory, 'cover.jpg'), tools, runner, signal, 1);
+      if (captured) {
+        cover = 'cover.jpg';
+        hasCover = true;
+      }
+    }
+  }
+
+  if (!hasCover) {
     // Valid neutral placeholder, independent of ffmpeg; a cover is optional for manual recovery.
     await writeFile(path.join(directory, cover), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'), { flag: 'wx', mode: 0o600 });
   }
-  const raw = { id: task.id, title: input.title.trim(), description: input.description, tags: input.tags, uploader: input.author, channel: input.author, manual: true };
+
+  const raw: Record<string, unknown> = {
+    id: task.id,
+    title: input.title.trim(),
+    description: input.description,
+    tags: input.tags,
+    uploader: input.author,
+    channel: input.author,
+    manual: true,
+  };
+  if (probeResult?.durationSeconds) raw.duration = probeResult.durationSeconds;
+  if (probeResult?.width != null) raw.width = probeResult.width;
+  if (probeResult?.height != null) raw.height = probeResult.height;
+
   const metadata = normalizeMetadata(raw, task);
+  if (probeResult?.durationSeconds) metadata.durationSeconds = probeResult.durationSeconds;
+  if (probeResult?.width != null) metadata.width = probeResult.width;
+  if (probeResult?.height != null) metadata.height = probeResult.height;
+
   await atomicJson(path.join(directory, 'media.info.json'), raw);
   await atomicJson(path.join(directory, 'metadata.json'), metadata);
   const manifest: MetadataManifest = { schemaVersion: 1, taskId: task.id, sourceUrl: task.sourceUrl, createdAt: new Date().toISOString(), thumbnail: await describeFile(directory, cover, signal), metadataFile: 'metadata.json', rawMetadataFile: 'media.info.json', metadata };
   if (!input.videoPath) return manifest;
-  await copyLocal(input.videoPath, path.join(directory, 'media.mp4'), ['.mp4'], Number.MAX_SAFE_INTEGER, signal);
-  await verifyVideo(directory, 'media.mp4', tools, runner, signal, true);
   return { ...manifest, video: await describeFile(directory, 'media.mp4', signal) };
 }

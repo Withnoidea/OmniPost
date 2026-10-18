@@ -126,3 +126,106 @@ test('verification serializes cookie completion and shutdown waits for in-flight
   assert.match(await readFile(path.join(root, 'cookies', 'youtube.txt'), 'utf8'), /verification-secret/);
   await assert.rejects(service.open(task), { code: 'CLOSING' });
 });
+
+
+test('rewrite IPC modes are validated and forwarded to the locked writer', async t => {
+  const root = await rootFor(t); const studio = makeStudio(root); const calls = [];
+  const manifest = { taskId: 'fixture' }; const task = { id: 'fixture', metadataAsset: manifest };
+  t.mock.method(studio.writer, 'rewriteMultiPlatform', async (...args) => { calls.push(args); return { state: 'completed' }; });
+  await studio.rewrite(task, ['bilibili', 'douyin'], 'missing');
+  assert.equal(calls[0][0], manifest); assert.deepEqual(calls[0][1], ['bilibili', 'douyin']);
+  assert.equal(calls[0][2].skipExisting, true); assert.ok(calls[0][2].signal instanceof AbortSignal);
+  await studio.rewrite(task, ['bilibili'], 'replace'); assert.equal(calls[1][2].skipExisting, false);
+  await studio.rewrite(task, ['bilibili']); assert.equal(calls[2][2].skipExisting, false);
+  await assert.rejects(studio.rewrite(task, ['bilibili'], 'overwrite-everything'), { code: 'INVALID_INPUT' });
+  assert.equal(calls.length, 3); await studio.close();
+});
+
+test('publish falls back to raw asset video when processed video is not available', async (t) => {
+  const root = await rootFor(t);
+  const studio = makeStudio(root);
+  const task = {
+    schemaVersion: 1,
+    id: '22222222-2222-4222-8222-222222222222',
+    state: 'READY',
+    asset: {
+      video: { file: 'media.source.mp4', bytes: 1000, sha256: 'abc' },
+      thumbnail: { file: 'cover.jpg', bytes: 200, sha256: 'def' },
+      metadata: { title: 'Raw Video' },
+    },
+  };
+
+  // Mock library returning written copy but NO processed video
+  t.mock.method(studio, 'library', async () => ({
+    active: [],
+    processed: null,
+    rewritten: {
+      platforms: {
+        douyin: { title: '抖音文案标题', hook: 'hook', body: 'body', tags: [] },
+      },
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    },
+  }));
+
+  const published = [];
+  const fakePublisher = {
+    publish: async (opts) => { published.push(opts); return { uploaded: true, filled: ['title'], warnings: [] }; },
+  };
+
+  // Simulate publish logic from omni:publish
+  const library = await studio.library(task);
+  const platform = 'douyin';
+  const copy = library.rewritten?.platforms[platform];
+  assert.ok(copy && copy.title?.trim());
+
+  const videoFile = library.processed?.video?.file ?? task.asset.video?.file;
+  assert.equal(videoFile, 'media.source.mp4');
+
+  await fakePublisher.publish({ platform, copy, videoPath: '/assets/' + videoFile });
+  assert.equal(published.length, 1);
+  assert.equal(published[0].videoPath, '/assets/media.source.mp4');
+  await studio.close();
+});
+
+test('publish rejects with clear platform-specific error when copy or video is missing', async (t) => {
+  const root = await rootFor(t);
+  const studio = makeStudio(root);
+  const task = {
+    schemaVersion: 1,
+    id: '33333333-3333-4333-8333-333333333333',
+    state: 'READY',
+    asset: null,
+  };
+
+  const platformLabels = {
+    xiaohongshu: '小红书',
+    bilibili: '哔哩哔哩',
+    douyin: '抖音',
+    kuaishou: '快手',
+  };
+
+  t.mock.method(studio, 'library', async () => ({
+    active: [],
+    processed: null,
+    rewritten: { platforms: {}, updatedAt: '2026-10-18T00:00:00.000Z' },
+  }));
+
+  const library = await studio.library(task);
+  const platform = 'bilibili';
+  const copy = library.rewritten?.platforms[platform];
+  const platformLabel = platformLabels[platform] ?? platform;
+
+  let copyError = '';
+  if (!copy || !copy.title?.trim()) {
+    copyError = `请先生成 ${platformLabel} 平台文案`;
+  }
+  assert.equal(copyError, '请先生成 哔哩哔哩 平台文案');
+
+  let videoError = '';
+  const videoFile = library.processed?.video?.file ?? task.asset?.video?.file;
+  if (!videoFile) {
+    videoError = '未找到可用视频文件';
+  }
+  assert.equal(videoError, '未找到可用视频文件');
+  await studio.close();
+});

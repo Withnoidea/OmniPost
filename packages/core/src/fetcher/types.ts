@@ -1,4 +1,4 @@
-export type Platform = 'youtube' | 'tiktok' | 'local';
+export type Platform = 'youtube' | 'tiktok' | 'douyin' | 'kuaishou' | 'bilibili' | 'local';
 export type TaskMode = 'download' | 'metadata';
 export type TaskState = 'queued' | 'downloading' | 'finalizing' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'fetching_metadata' | 'attaching' | 'AWAITING_MEDIA' | 'READY';
 export type ErrorCode =
@@ -30,6 +30,8 @@ export interface VideoMetadata {
   categories: string[];
   subtitleLanguages: string[];
   automaticCaptionLanguages: string[];
+  width?: number | null;
+  height?: number | null;
 }
 export interface AssetFile { file: string; bytes: number; sha256: string }
 export interface MetadataManifest {

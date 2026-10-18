@@ -352,3 +352,39 @@ test('CLI partial failure has exit code 1 and keeps the successful platform file
   assert.ok(!result.stdout.includes('provider-secret'));
   assert.deepEqual(Object.keys(JSON.parse(await readFile(f.output, 'utf8')).platforms), ['xiaohongshu']);
 });
+
+test('incremental all-platform generation preserves saved edits and requests only missing platforms', async t => {
+  const { root, id, output } = await fixture(t); const calls = []; const progress = [];
+  const writer = new AIRewriter({ ...config, dataDirectory: root, onProgress: event => progress.push(event) }, mockTransport(calls));
+  const initial = await writer.rewriteTask(id, ['xiaohongshu']);
+  const edited = await writer.saveCopy(id, 'xiaohongshu', { ...copies.xiaohongshu, title: '人工审定｜保留这一版' }, initial.document.updatedAt);
+  calls.length = 0; progress.length = 0;
+  const result = await writer.rewriteTask(id, [...TARGET_PLATFORMS], { skipExisting: true });
+  assert.equal(result.state, 'completed');
+  assert.deepEqual(result.requestedPlatforms, TARGET_PLATFORMS.filter(p => p !== 'xiaohongshu'));
+  assert.deepEqual(calls.map(call => call.input.targetPlatform), result.requestedPlatforms);
+  assert.deepEqual(result.document.platforms.xiaohongshu, edited.platforms.xiaohongshu);
+  assert.ok(progress.every(event => event.total === 3));
+  assert.deepEqual(progress.filter(e => e.phase === 'saved').map(e => e.completed), [1, 2, 3]);
+  const before = await readFile(output, 'utf8'); calls.length = 0;
+  const noOp = await writer.rewriteTask(id, [...TARGET_PLATFORMS], { skipExisting: true });
+  assert.equal(noOp.state, 'completed'); assert.deepEqual(noOp.requestedPlatforms, []); assert.equal(calls.length, 0);
+  assert.equal(await readFile(output, 'utf8'), before);
+  const replaced = await writer.rewriteTask(id, [...TARGET_PLATFORMS], { skipExisting: false });
+  assert.equal(replaced.requestedPlatforms.length, 4); assert.equal(calls.length, 4);
+  assert.equal(replaced.document.platforms.xiaohongshu.editedAt, undefined);
+});
+test('incremental retry after partial failure skips successes and retains previous manual copy', async t => {
+  const { root, id } = await fixture(t); let fail = true; const calls = [];
+  const writer = new AIRewriter({ ...config, dataDirectory: root }, async (url, init) => {
+    const platform = JSON.parse(JSON.parse(init.body).messages[1].content).targetPlatform;
+    calls.push(platform);
+    if (platform === 'bilibili' && fail) return new Response('{}', { status: 503 });
+    return response(platform);
+  });
+  const first = await writer.rewriteTask(id, [...TARGET_PLATFORMS], { skipExisting: true });
+  assert.equal(first.state, 'partial'); const original = first.document.platforms.xiaohongshu;
+  fail = false; calls.length = 0;
+  const retried = await writer.rewriteTask(id, [...TARGET_PLATFORMS], { skipExisting: true });
+  assert.deepEqual(calls, ['bilibili']); assert.deepEqual(retried.document.platforms.xiaohongshu, original);
+});

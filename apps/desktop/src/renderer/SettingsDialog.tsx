@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, KeyRound, Loader2, Settings2, ShieldCheck, X } from 'lucide-react';
+import { Check, KeyRound, Loader2, Settings2, ShieldCheck, Wifi, X } from 'lucide-react';
 import type { ProxySettings, StudioSettings } from '../shared/contracts.js';
 import { api, unwrap, errorMessage } from './bridge.js';
 export function SettingsDialog({ proxy, onClose, onSave }: { proxy: ProxySettings; onClose: () => void; onSave: (proxy: ProxySettings) => void }) {
@@ -9,6 +9,8 @@ export function SettingsDialog({ proxy, onClose, onSave }: { proxy: ProxySetting
   const [key, setKey] = useState(''); const [changeKey, setChangeKey] = useState(false);
   const [headers, setHeaders] = useState(''); const [changeHeaders, setChangeHeaders] = useState(false);
   const [models, setModels] = useState<string[]>([]); const [testing, setTesting] = useState(false); const [connection, setConnection] = useState('');
+  const [testingProxy, setTestingProxy] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; latencyMs: number; error?: string } | null>(null);
   const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   useEffect(() => { const element = dialog.current; element?.showModal(); let live = true;
     void api.studioSettings().then(unwrap).then(value => { if (live) setSettings(value); }).catch(e => { if (live) setError(errorMessage(e)); });
@@ -22,6 +24,19 @@ export function SettingsDialog({ proxy, onClose, onSave }: { proxy: ProxySetting
       catch { throw new Error('自定义 Headers 必须为 JSON 对象，例如 {"X-Workspace": "creator"}。'); }
     }
     return { ...settings.ai, ...(changeKey ? { apiKey: key.trim() } : {}), ...(changeHeaders ? { headers: parsed! } : {}) };
+  }
+  async function testProxyConnection() {
+    if (testingProxy || !url.trim()) return;
+    setTestingProxy(true);
+    setProxyTestResult(null);
+    try {
+      const res = unwrap(await api.testProxy(url.trim()));
+      setProxyTestResult(res);
+    } catch (e) {
+      setProxyTestResult({ ok: false, latencyMs: 0, error: errorMessage(e) });
+    } finally {
+      setTestingProxy(false);
+    }
   }
   async function testConnection() {
     if (!settings || testing) return; setTesting(true); setError(''); setConnection(''); setModels([]);
@@ -64,7 +79,7 @@ export function SettingsDialog({ proxy, onClose, onSave }: { proxy: ProxySetting
         </details>
         <p className="field-hint">改写将原标题、简介与内嵌字幕文本发送至上方服务。不上传视频，也不读取 Cookie。更换服务时请更换密钥。</p>
       </fieldset>
-      <fieldset disabled={saving || testing} className="settings-section"><legend>下载网络代理</legend><label className="switch-line">使用代理连接<input type="checkbox" role="switch" checked={enabled} onChange={e => setEnabled(e.target.checked)} /><span className={enabled ? 'switch on' : 'switch'} aria-hidden="true" /></label><label className="field-label" htmlFor="proxy-url">代理地址</label><input id="proxy-url" value={url} onChange={e => setUrl(e.target.value)} placeholder="http://127.0.0.1:7890" spellCheck={false} /><p className="field-hint">支持 HTTP / HTTPS / SOCKS5；仅用于 Fetcher，不代理 LLM 或系统流量。</p></fieldset>
+      <fieldset disabled={saving || testing} className="settings-section"><legend><Wifi size={14} />下载网络代理</legend><label className="switch-line">使用代理连接<input type="checkbox" role="switch" checked={enabled} onChange={e => setEnabled(e.target.checked)} /><span className={enabled ? 'switch on' : 'switch'} aria-hidden="true" /></label><label className="field-label" htmlFor="proxy-url">代理地址</label><div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px' }}><input id="proxy-url" style={{ flex: 1 }} value={url} onChange={e => { setUrl(e.target.value); setProxyTestResult(null); }} placeholder="http://127.0.0.1:7890" spellCheck={false} /><button type="button" className="secondary-button" disabled={testingProxy || !url.trim()} onClick={() => void testProxyConnection()}>{testingProxy ? <Loader2 className="spin" size={13} /> : <Wifi size={13} />}测试连接</button></div>{proxyTestResult && <p className={proxyTestResult.ok ? 'stage-notice' : 'form-error'} style={{ marginTop: '8px', fontSize: '11px' }} role="status">{proxyTestResult.ok ? `连接成功 (延迟: ${proxyTestResult.latencyMs}ms)` : `连接失败: ${proxyTestResult.error}`}</p>}<p className="field-hint">支持 HTTP / HTTPS / SOCKS5；仅用于 Fetcher，不代理 LLM 或系统流量。</p></fieldset>
       <fieldset disabled={saving || testing} className="settings-section"><legend>FFmpeg 轻量处理</legend><div className="settings-grid">{([['speed','变速倍率',0.5,2,0.01],['cropPercent','总裁剪比例 %',0,10,0.1],['contrast','对比度',0.8,1.2,0.01],['sharpen','锐化强度',0,1,0.05]] as const).map(([name,label,min,max,step]) => <label key={name} className="field-label">{label}<input id={`ffmpeg-${name}`} type="number" min={min} max={max} step={step} required value={settings.processor[name]} onChange={e => setSettings({ ...settings, processor: { ...settings.processor, [name]: e.target.valueAsNumber } })} /></label>)}</div><p className="field-hint">输出 H.264 / AAC，保留原片。微调不保证绕过平台重复内容识别，请仅处理有权使用的内容。</p></fieldset>
       </>}
       <div className="privacy-note"><ShieldCheck size={16} /><span>API Key 与代理凭据使用 Windows 系统加密；不可用时不明文落盘。</span></div>

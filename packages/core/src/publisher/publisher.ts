@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { atomicJson, isRecord } from '../fetcher/store.js';
 import { TARGET_PLATFORMS, type LocalizedCopy, type TargetPlatform } from '../rewriter/types.js';
-import { PLATFORM_ADAPTERS, platformHost } from './platforms.js';
+import { PLATFORM_ADAPTERS, platformHost, creatorRoute } from './platforms.js';
 
 export type AccountState = 'disconnected' | 'connecting' | 'connected';
 export interface PlatformAccount { platform: TargetPlatform; state: AccountState; checkedAt: string | null; windowOpen: boolean }
@@ -69,21 +69,44 @@ export class PublisherService {
     return { context, page };
   }
   async isLoggedIn(platform: TargetPlatform, context: BrowserContext, page: Page): Promise<boolean> {
-    if (!platformHost(platform, page.url()) || /\/(login|passport|signin)(?:[/?#]|$)/i.test(page.url())) return false;
+    if (page.isClosed() || !platformHost(platform, page.url())) return false;
     const adapter = PLATFORM_ADAPTERS[platform];
-    const cookies = await context.cookies();
-    const session = cookies.some(cookie => adapter.cookies.includes(cookie.name) && cookie.value && (cookie.expires < 0 || cookie.expires > Date.now() / 1000) && platformHost(platform, `https://${cookie.domain.replace(/^\./, '')}`));
-    if (!session) return false;
-    for (const selector of adapter.signedIn) if (await page.locator(selector).first().isVisible().catch(() => false)) return true;
-    return false;
+    const credentials = context.cookies().then(cookies => new Set(cookies.filter(cookie => cookie.value.trim()
+      && (cookie.expires === -1 || cookie.expires > Date.now() / 1000)
+      && platformHost(platform, `https://${cookie.domain.replace(/^\./, '')}`)).map(cookie => cookie.name)));
+    const visible = async (): Promise<boolean> => {
+      if (!creatorRoute(platform, page.url())) return false;
+      // Probe selectors concurrently; a stale selector must never delay a core-cookie success.
+      return Promise.any(adapter.signedIn.map(async selector => {
+        if (await page.locator(selector).first().isVisible()) return true;
+        throw new Error('Not visible');
+      })).catch(() => false);
+    };
+    return Promise.any([
+      credentials.then(names => { if (adapter.coreCookies.every(name => names.has(name))) return true; throw new Error('No core credentials'); }),
+      Promise.all([credentials, visible()]).then(([names, signedIn]) => {
+        // Alternate session names need BOTH the actual creator route and creator DOM.
+        // Neither URL nor an avatar/login heading alone is proof of authentication.
+        if (signedIn && adapter.cookies.some(name => names.has(name))) return true;
+        throw new Error('No corroborated session');
+      }),
+    ]).catch(() => false);
   }
   private async authenticate(platform: TargetPlatform, context: BrowserContext, page: Page): Promise<void> {
-    await page.goto(PLATFORM_ADAPTERS[platform].home, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    // Login cookies can arrive while analytics/assets keep navigation pending. Start polling now.
+    void page.goto(PLATFORM_ADAPTERS[platform].home, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => {});
     const deadline = Date.now() + (this.options.loginTimeoutMs ?? 180000);
     while (Date.now() < deadline) {
       if (this.closed || page.isClosed() || !this.contexts.has(platform)) throw new PublisherError('LOGIN_CANCELLED', '登录窗口已关闭。');
-      if (await this.isLoggedIn(platform, context, page)) { this.update(platform, 'connected'); await this.save(); return; }
-      await new Promise(resolve => setTimeout(resolve, this.options.pollMs ?? 1000));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const loggedIn = await Promise.race([
+        this.isLoggedIn(platform, context, page),
+        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), Math.min(1000, Math.max(1, deadline - Date.now()))); }),
+      ]).finally(() => { if (timer) clearTimeout(timer); });
+      // Closing a window during a probe must not emit a late Connected event.
+      if (this.closed || page.isClosed() || !this.contexts.has(platform)) throw new PublisherError('LOGIN_CANCELLED', '登录窗口已关闭。');
+      if (loggedIn) { this.update(platform, 'connected'); await this.save(); return; }
+      await new Promise(resolve => setTimeout(resolve, Math.min(this.options.pollMs ?? 1000, Math.max(0, deadline - Date.now()))));
     }
     throw new PublisherError('LOGIN_TIMEOUT', '未检测到有效登录。请重新连接；如平台改版，请检查页面并更新适配器。');
   }

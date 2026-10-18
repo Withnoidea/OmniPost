@@ -1,4 +1,4 @@
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { readdir, readFile, realpath, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { classifyDownloadError, FetcherError, throwIfAborted } from './errors.js';
 import type { ProcessRunner } from './process.js';
@@ -20,7 +20,10 @@ function commonArguments(proxy: string, options: DownloaderOptions): string[] {
     '--ignore-config', '--no-cache-dir', '--no-playlist', '--no-color', '--newline', '--no-simulate',
     '--no-overwrites', '--no-post-overwrites',
     '--socket-timeout', String(options.socketTimeoutSeconds),
-    '--retries', String(options.retries), '--fragment-retries', String(options.retries), '--extractor-retries', String(options.retries),
+    '--retries', String(options.retries), '--fragment-retries', String(options.retries), '--extractor-retries', String(Math.max(3, options.retries)),
+    '--no-check-certificates',
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    '--referer', 'https://www.google.com/',
     '--proxy', proxy, '--no-js-runtimes', '--js-runtimes', `node:${options.tools.node}`,
     '--match-filters', '!is_live & !is_upcoming',
     '--write-info-json', '--write-thumbnail',
@@ -110,11 +113,17 @@ export async function downloadIntoWorkspace(
   } catch { throw new FetcherError('INVALID_OUTPUT'); }
   return path.basename(full);
 }
-export async function verifyVideo(directory: string, video: string, tools: PortableTools, runner: ProcessRunner, signal: AbortSignal, requireMp4 = false): Promise<void> {
+export interface VideoProbeResult {
+  durationSeconds: number;
+  width: number | null;
+  height: number | null;
+}
+
+export async function verifyVideo(directory: string, video: string, tools: PortableTools, runner: ProcessRunner, signal: AbortSignal, requireMp4 = false): Promise<VideoProbeResult> {
   let stdout = '';
   const result = await runner({
     executable: tools.ffprobe,
-    args: ['-v', 'error', '-show_entries', 'format=duration,format_name:stream=codec_type', '-of', 'json', path.join(directory, video)],
+    args: ['-v', 'error', '-show_entries', 'format=duration,format_name:stream=codec_type,width,height', '-of', 'json', path.join(directory, video)],
     cwd: directory, signal,
     onLine: (line) => { if (stdout.length < 1024 * 1024) stdout += line; },
   });
@@ -125,7 +134,37 @@ export async function verifyVideo(directory: string, video: string, tools: Porta
       || !data.streams.some((stream: unknown) => isRecord(stream) && stream.codec_type === 'video')
       || !isRecord(data.format) || !Number.isFinite(Number(data.format.duration)) || Number(data.format.duration) <= 0
       || (requireMp4 && (typeof data.format.format_name !== 'string' || !data.format.format_name.split(',').includes('mp4')))) throw new Error();
+    const videoStream = data.streams.find((stream: unknown) => isRecord(stream) && stream.codec_type === 'video') as { width?: unknown; height?: unknown } | undefined;
+    const width = typeof videoStream?.width === 'number' && Number.isInteger(videoStream.width) && videoStream.width > 0 ? videoStream.width : null;
+    const height = typeof videoStream?.height === 'number' && Number.isInteger(videoStream.height) && videoStream.height > 0 ? videoStream.height : null;
+    const durationSeconds = Math.max(1, Math.round(Number(data.format.duration)));
+    return { durationSeconds, width, height };
   } catch { throw new FetcherError('INVALID_OUTPUT'); }
+}
+
+export async function captureVideoFrame(
+  videoFile: string,
+  targetImageFile: string,
+  tools: PortableTools,
+  runner: ProcessRunner,
+  signal: AbortSignal,
+  timeSeconds = 1,
+): Promise<boolean> {
+  try {
+    if (!tools.ffmpeg || tools.ffmpeg === 'missing') return false;
+    const result = await runner({
+      executable: tools.ffmpeg,
+      args: ['-y', '-ss', String(timeSeconds), '-i', videoFile, '-frames:v', '1', '-q:v', '2', targetImageFile],
+      cwd: path.dirname(targetImageFile),
+      signal,
+      onLine: () => {},
+    });
+    if (result.exitCode !== 0) return false;
+    const bytes = await readFile(targetImageFile);
+    return bytes.length > 0 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+  } catch {
+    return false;
+  }
 }
 export async function prepareMetadataManifest(task: DownloadTask, directory: string, signal: AbortSignal): Promise<MetadataManifest> {
   throwIfAborted(signal);
@@ -136,8 +175,21 @@ export async function prepareMetadataManifest(task: DownloadTask, directory: str
     if ((await stat(path.join(directory, 'media.info.json'))).size > 32 * 1024 * 1024) throw new FetcherError('INVALID_OUTPUT');
     const metadata = normalizeMetadata(await readJson(path.join(directory, 'media.info.json')), task);
     const covers = names.filter((name) => /^cover\.(?:jpg|jpeg|png|webp|avif|heic)$/i.test(name));
-    if (covers.length !== 1) throw new FetcherError('INVALID_OUTPUT');
-    const thumbnailFile = await describeFile(directory, covers[0]!, signal);
+    if (covers.length === 0) throw new FetcherError('INVALID_OUTPUT');
+    let chosenCover = covers[0]!;
+    if (covers.length > 1) {
+      const order = ['.jpg', '.jpeg', '.png', '.webp', '.avif', '.heic'];
+      covers.sort((a, b) => {
+        const ea = order.indexOf(path.extname(a).toLowerCase());
+        const eb = order.indexOf(path.extname(b).toLowerCase());
+        return (ea === -1 ? 99 : ea) - (eb === -1 ? 99 : eb);
+      });
+      chosenCover = covers[0]!;
+      for (let i = 1; i < covers.length; i++) {
+        await unlink(path.join(directory, covers[i]!)).catch(() => {});
+      }
+    }
+    const thumbnailFile = await describeFile(directory, chosenCover, signal);
     throwIfAborted(signal);
     await atomicJson(path.join(directory, 'metadata.json'), metadata);
     return {

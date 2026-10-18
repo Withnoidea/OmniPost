@@ -6,7 +6,7 @@ import { FetcherError } from './errors.js';
 export interface BrowserCookie { domain: string; path: string; name: string; value: string; secure: boolean; httpOnly?: boolean; expirationDate?: number }
 export function cookieDomainAllowed(platform: Platform, domain: string): boolean {
   const host = domain.replace(/^\./, '').toLowerCase();
-  const roots = platform === 'youtube' ? ['youtube.com', 'google.com'] : platform === 'tiktok' ? ['tiktok.com', 'tiktokv.com'] : [];
+  const roots = platform === 'youtube' ? ['youtube.com', 'google.com'] : platform === 'tiktok' ? ['tiktok.com', 'tiktokv.com'] : platform === 'douyin' ? ['douyin.com', 'iesdouyin.com'] : platform === 'kuaishou' ? ['kuaishou.com'] : platform === 'bilibili' ? ['bilibili.com', 'b23.tv'] : [];
   return roots.some(root => host === root || host.endsWith('.' + root));
 }
 export function serializeCookies(platform: Platform, cookies: BrowserCookie[], now = Date.now() / 1000): string {
@@ -22,7 +22,7 @@ export function serializeCookies(platform: Platform, cookies: BrowserCookie[], n
 export class CookieStore {
   constructor(private readonly root: string) {}
   private file(platform: Platform): string {
-    if (platform !== 'youtube' && platform !== 'tiktok') throw new FetcherError('INVALID_OPTIONS');
+    if (platform === 'local') throw new FetcherError('INVALID_OPTIONS');
     return path.join(this.root, 'cookies', `${platform}.txt`);
   }
   async get(platform: Platform): Promise<string | undefined> {

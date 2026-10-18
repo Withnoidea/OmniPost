@@ -17,6 +17,8 @@ export interface SourceText {
 }
 export type AIProtocol = 'openai' | 'anthropic';
 export interface RewriteOptions {
+  /** Durable incremental generation: skip saved platforms inside the write lock. */
+  skipExisting?: boolean;
   protocol?: AIProtocol;
   headers?: Record<string, string>;
   systemPrompt?: string;

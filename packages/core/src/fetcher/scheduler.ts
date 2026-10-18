@@ -2,8 +2,11 @@ import { CookieStore } from './cookies.js';
 import { prepareManual, validateManual } from './manual.js';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { readdir } from 'node:fs/promises';
 import { integerOption, normalizeProxy, normalizeSource, validateTools } from './config.js';
-import { downloadIntoWorkspace, fetchMetadataIntoWorkspace, prepareManifest, prepareMetadataManifest, verifyVideo } from './downloader.js';
+import { captureVideoFrame, downloadIntoWorkspace, fetchMetadataIntoWorkspace, prepareManifest, prepareMetadataManifest, verifyVideo } from './downloader.js';
+import { isDirectSupported, tryDirectParse } from './parsers/index.js';
+import { downloadDirectIntoWorkspace, fetchDirectMetadataIntoWorkspace } from './direct-downloader.js';
 import { abortError, asFetcherError, FetcherError, throwIfAborted } from './errors.js';
 import { runProcess, type ProcessRunner } from './process.js';
 import { AssetStore, describeFile } from './store.js';
@@ -67,6 +70,12 @@ export class DownloadScheduler {
   getTask(id: string): DownloadTask | undefined { const task = this.tasks.get(id); return task ? structuredClone(task) : undefined; }
   listTasks(): DownloadTask[] { return [...this.tasks.values()].map((task) => structuredClone(task)); }
   enqueue(request: DownloadRequest): Promise<DownloadTask> { return this.enqueueMode(request, 'download'); }
+  download(url: string, options: { proxy?: string; timeoutMs?: number } = {}): Promise<DownloadTask> {
+    const req: DownloadRequest = { url };
+    if (options.proxy !== undefined) req.proxy = options.proxy;
+    if (options.timeoutMs !== undefined) req.timeoutMs = options.timeoutMs;
+    return this.enqueue(req);
+  }
   /** Resolves after metadata + cover are durable (or returns a failed/cancelled task), never downloads video. */
   async fetchMetadata(url: string, options: MetadataOptions = {}): Promise<DownloadTask> {
     const task = await this.enqueueMode({ ...options, url }, 'metadata');
@@ -219,9 +228,28 @@ export class DownloadScheduler {
         const metadata = await this.store.committedMetadata(task.id);
         if (!metadata) throw new FetcherError('INVALID_OUTPUT');
         const directory = await this.store.stageLocalMedia(task.id, input.localFilePath, controller.signal);
-        await verifyVideo(directory, 'media.mp4', this.options.tools, this.runner, controller.signal, true);
+        const probeResult = await verifyVideo(directory, 'media.mp4', this.options.tools, this.runner, controller.signal, true);
         const video = await describeFile(directory, 'media.mp4', controller.signal);
-        const manifest = { ...metadata, video: { ...video, file: `media.${path.basename(directory)}.mp4` } };
+        let thumbnail = metadata.thumbnail;
+        const assetDir = this.store.assetDirectory(task.id);
+        const hasValidCover = await describeFile(assetDir, metadata.thumbnail.file, controller.signal).then(() => true).catch(() => false);
+        if (!hasValidCover) {
+          const captured = await captureVideoFrame(path.join(directory, 'media.mp4'), path.join(assetDir, 'cover.jpg'), this.options.tools, this.runner, controller.signal, 1);
+          if (captured) {
+            thumbnail = await describeFile(assetDir, 'cover.jpg', controller.signal);
+          }
+        }
+        const updatedMetadata = { ...metadata.metadata };
+        if (probeResult?.durationSeconds && !updatedMetadata.durationSeconds) {
+          updatedMetadata.durationSeconds = probeResult.durationSeconds;
+        }
+        if (probeResult?.width != null && !updatedMetadata.width) {
+          updatedMetadata.width = probeResult.width;
+        }
+        if (probeResult?.height != null && !updatedMetadata.height) {
+          updatedMetadata.height = probeResult.height;
+        }
+        const manifest = { ...metadata, thumbnail, metadata: updatedMetadata, video: { ...video, file: `media.${path.basename(directory)}.mp4` } };
         throwIfAborted(controller.signal);
         await this.store.commitAttachment(task.id, directory, manifest);
         committed = true; task.asset = manifest; task.state = 'READY'; delete task.error;
@@ -231,29 +259,66 @@ export class DownloadScheduler {
         const directory = await this.store.createWorkspace(task.id);
         cookieSnapshot = await new CookieStore(this.options.dataDirectory).snapshot(task.platform);
         const cookieOptions = cookieSnapshot ? { cookieFile: cookieSnapshot.file } : {};
-        if (input.kind === 'metadata') {
-          await fetchMetadataIntoWorkspace(task, input.proxy, directory, {
-            ...cookieOptions, tools: this.options.tools, socketTimeoutSeconds: Math.min(5, this.socketTimeoutSeconds), retries: 0,
-          }, this.runner, controller.signal);
-          await this.transition(task, 'finalizing');
-          const metadata = await prepareMetadataManifest(task, directory, controller.signal);
-          throwIfAborted(controller.signal);
-          await this.store.commitMetadata(task.id, metadata);
-          committed = true; task.metadataAsset = metadata; task.state = 'AWAITING_MEDIA'; delete task.error;
-        } else {
-          const video = await downloadIntoWorkspace(task, input.proxy, directory, {
-            ...cookieOptions, tools: this.options.tools, socketTimeoutSeconds: this.socketTimeoutSeconds, retries: this.retries,
-          }, this.runner, controller.signal, (progress) => {
-            task.progress = progress;
-            this.emit({ type: 'progress', taskId: task.id, progress });
-          });
-          await this.transition(task, 'finalizing');
-          await verifyVideo(directory, video, this.options.tools, this.runner, controller.signal);
-          const manifest = await prepareManifest(task, directory, video, controller.signal);
-          throwIfAborted(controller.signal);
-          // Point of no return: cancellation after this check cannot undo a committed asset.
-          await this.store.commit(task.id, manifest);
-          committed = true; task.asset = manifest; task.state = 'completed'; delete task.error;
+
+        let handledByDirect = false;
+        if (isDirectSupported(task.sourceUrl)) {
+          const parsed = await tryDirectParse(task.sourceUrl, controller.signal);
+          if (parsed) {
+            if (input.kind === 'metadata') {
+              const meta = await fetchDirectMetadataIntoWorkspace(task, parsed, directory, controller.signal);
+              throwIfAborted(controller.signal);
+              await this.store.commitMetadata(task.id, meta);
+              committed = true; task.metadataAsset = meta; task.state = 'AWAITING_MEDIA'; delete task.error;
+              handledByDirect = true;
+            } else {
+              const { videoFile, manifest } = await downloadDirectIntoWorkspace(
+                task, parsed, directory,
+                { ...cookieOptions, tools: this.options.tools, socketTimeoutSeconds: this.socketTimeoutSeconds, retries: this.retries },
+                this.runner, controller.signal, (progress) => {
+                  task.progress = progress;
+                  this.emit({ type: 'progress', taskId: task.id, progress });
+                }
+              );
+              await this.transition(task, 'finalizing');
+              await verifyVideo(directory, videoFile, this.options.tools, this.runner, controller.signal);
+              throwIfAborted(controller.signal);
+              await this.store.commit(task.id, manifest);
+              committed = true; task.asset = manifest; task.state = 'completed'; delete task.error;
+              handledByDirect = true;
+            }
+          }
+        }
+
+        if (!handledByDirect) {
+          if (input.kind === 'metadata') {
+            await fetchMetadataIntoWorkspace(task, input.proxy, directory, {
+              ...cookieOptions, tools: this.options.tools, socketTimeoutSeconds: Math.min(5, this.socketTimeoutSeconds), retries: 0,
+            }, this.runner, controller.signal);
+            await this.transition(task, 'finalizing');
+            const metadata = await prepareMetadataManifest(task, directory, controller.signal);
+            throwIfAborted(controller.signal);
+            await this.store.commitMetadata(task.id, metadata);
+            committed = true; task.metadataAsset = metadata; task.state = 'AWAITING_MEDIA'; delete task.error;
+          } else {
+            const video = await downloadIntoWorkspace(task, input.proxy, directory, {
+              ...cookieOptions, tools: this.options.tools, socketTimeoutSeconds: this.socketTimeoutSeconds, retries: this.retries,
+            }, this.runner, controller.signal, (progress) => {
+              task.progress = progress;
+              this.emit({ type: 'progress', taskId: task.id, progress });
+            });
+            await this.transition(task, 'finalizing');
+            await verifyVideo(directory, video, this.options.tools, this.runner, controller.signal);
+            const fileList = await readdir(directory);
+            const hasCover = fileList.some(n => /^cover\.(?:jpg|jpeg|png|webp|avif|heic)$/i.test(n));
+            if (!hasCover) {
+              await captureVideoFrame(path.join(directory, video), path.join(directory, 'cover.jpg'), this.options.tools, this.runner, controller.signal, 1);
+            }
+            const manifest = await prepareManifest(task, directory, video, controller.signal);
+            throwIfAborted(controller.signal);
+            // Point of no return: cancellation after this check cannot undo a committed asset.
+            await this.store.commit(task.id, manifest);
+            committed = true; task.asset = manifest; task.state = 'completed'; delete task.error;
+          }
         }
       }
     } catch (error) {
