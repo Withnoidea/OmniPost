@@ -1,4 +1,4 @@
-export const TARGET_PLATFORMS = Object.freeze(['xiaohongshu', 'bilibili', 'douyin', 'kuaishou'] as const);
+export const TARGET_PLATFORMS = Object.freeze(['xiaohongshu', 'bilibili', 'douyin', 'kuaishou', 'channels'] as const);
 export type TargetPlatform = typeof TARGET_PLATFORMS[number];
 export interface SubtitleSnippet { text?: string; data?: string; url?: string; ext?: string }
 /** A text-only subset of yt-dlp info JSON. Subtitle URLs are never fetched or sent to the LLM. */

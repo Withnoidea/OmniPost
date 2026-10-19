@@ -16,3 +16,6 @@ export { PublisherService, PublisherError } from './publisher/publisher.js';
 export type { PlatformAccount, PublishInput, PublishResult } from './publisher/publisher.js';
 
 export * from './publisher/publications.js';
+
+export { cleanShareText, extractShareUrls, extractMediaFromShare } from './fetcher/share.js';
+export type { ExtractedShareUrl } from './fetcher/share.js';

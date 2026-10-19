@@ -61,17 +61,17 @@ export function parseApiResponse(
       else if (platform === 'kuaishou') noteUrl = `https://www.kuaishou.com/short-video/${id}`;
     }
 
-    const stat = archive.stat || archive.statistics || archive.interact_info || item.stat || item.statistics || item.interact_info || {};
+    const stat = archive.stat || archive.statistics || archive.interact_info || archive.counts || item.stat || item.statistics || item.interact_info || item.counts || {};
 
     const views = parseNumValue(
       archive.read_count ?? archive.read_num ?? archive.view_count ?? archive.view_num ?? archive.views ?? archive.play_count ?? archive.playCount ?? archive.viewCount ?? archive.impressions ??
-      stat.view ?? stat.view_count ?? stat.read_count ?? stat.play_count ?? stat.views ?? stat.playCount ?? stat.viewCount ?? stat.show_count ??
+      stat.view ?? stat.view_count ?? stat.read_count ?? stat.play_count ?? stat.views ?? stat.playCount ?? stat.viewCount ?? stat.show_count ?? archive.video_play_count ?? archive.play_count ?? stat.play_count_valid ?? stat.vv ??
       item.read_count ?? item.view_count ?? item.play_count ?? item.viewCount ?? 0
     );
 
     const likes = parseNumValue(
       archive.like_count ?? archive.like_num ?? archive.liked_count ?? archive.likes ?? archive.digg_count ?? archive.likeCount ??
-      stat.like ?? stat.like_count ?? stat.liked_count ?? stat.digg_count ?? stat.likes ?? stat.likeCount ?? stat.diggCount ??
+      stat.like ?? stat.like_count ?? stat.liked_count ?? stat.digg_count ?? stat.likes ?? stat.likeCount ?? stat.diggCount ?? archive.video_like_count ?? archive.digg_count ??
       item.like_count ?? item.liked_count ?? item.likeCount ?? 0
     );
 
@@ -206,7 +206,21 @@ export class PublisherService {
     if ((await lstat(directory)).isSymbolicLink()) throw new PublisherError('INVALID_PROFILE', '账号目录无效。');
     let context: BrowserContext;
     try {
-      context = await this.launchContext(directory, { headless: false, viewport: null, acceptDownloads: false, permissions: [], timeout: 30000 });
+      context = await this.launchContext(directory, {
+        headless: false,
+        viewport: null,
+        acceptDownloads: false,
+        permissions: [],
+        ignoreHTTPSErrors: true,
+        args: [
+          '--ignore-certificate-errors',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-features=OriginKeyedAgentClusters',
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+        ],
+        timeout: 30000,
+      });
     } catch (err) {
       if (err instanceof PublisherError) throw err;
       throw new PublisherError('BROWSER_UNAVAILABLE', '无法启动 Chromium；请先运行 npm run setup:browser，并确认该账号目录未被占用。');
@@ -218,6 +232,14 @@ export class PublisherService {
       context.setDefaultTimeout(this.options.fieldTimeoutMs ?? 20000);
     }
     const page = context.pages()[0] ?? await context.newPage();
+    if (typeof page.addInitScript === 'function') {
+      await page.addInitScript(() => {
+        try {
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          (window as any).chrome = (window as any).chrome || { runtime: {} };
+        } catch {}
+      }).catch(() => {});
+    }
     this.update(platform, 'connecting');
     return { context, page };
   }
@@ -281,7 +303,8 @@ export class PublisherService {
     do {
       if (page.isClosed() || !platformHost(platform, page.url())) return false;
       for (const frame of page.frames()) {
-        if (!platformHost(platform, frame.url())) continue;
+        const frameUrl = frame.url();
+        if (frameUrl && !platformHost(platform, frameUrl) && !frameUrl.startsWith('about:')) continue;
         for (const selector of selectors) {
           const locator = frame.locator(selector).first();
           if (await locator.count().catch(() => 0)) {
@@ -307,8 +330,30 @@ export class PublisherService {
         await this.authenticate(platform, context, page); authenticated = true;
         await page.goto(PLATFORM_ADAPTERS[platform].upload, { waitUntil: 'domcontentloaded', timeout: 45000 });
         const adapter = PLATFORM_ADAPTERS[platform];
+
+        if (platform === 'bilibili') {
+          // 若之前发布已完成停留在“投递成功”或弹出草稿提示，自动点击继续/重置为新投稿
+          try {
+            const continueBtn = page.locator('button:has-text("继续投稿"), a:has-text("继续投稿"), button:has-text("再投一个")').first();
+            if (await continueBtn.isVisible().catch(() => false)) {
+              await continueBtn.click().catch(() => {});
+              await new Promise(r => setTimeout(r, 800));
+            }
+          } catch {}
+          try {
+            const discardBtn = page.locator('button:has-text("放弃草稿"), button:has-text("不恢复"), [class*="discard"]').first();
+            if (await discardBtn.isVisible().catch(() => false)) {
+              await discardBtn.click().catch(() => {});
+              await new Promise(r => setTimeout(r, 600));
+            }
+          } catch {}
+        }
         const result: PublishResult = { platform, uploaded: false, filled: [], warnings: [], manualConfirmation: true };
         result.uploaded = await this.field(page, platform, adapter.video, locator => locator.setInputFiles(input.videoPath, { timeout: 20000 }));
+        if (result.uploaded) {
+          // 视频文件注入后，等待 B站上传组件建立分片并切换至稿件信息编辑状态
+          await new Promise(r => setTimeout(r, 1200));
+        }
         if (!result.uploaded) result.warnings.push('未找到视频上传控件，请在窗口中手动上传。');
         const title = await this.field(page, platform, adapter.title, locator => locator.fill(input.copy.title, { timeout: 3000 }));
         if (title) result.filled.push('标题'); else result.warnings.push('标题未能自动填写，请手动检查。');
@@ -351,7 +396,10 @@ export class PublisherService {
 
       const launchOptions = {
         headless: true,
+        ignoreHTTPSErrors: true,
         args: [
+          '--ignore-certificate-errors',
+          '--disable-features=OriginKeyedAgentClusters',
           '--disable-blink-features=AutomationControlled',
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -396,6 +444,13 @@ export class PublisherService {
       page = await context.newPage();
       if (typeof page.setDefaultTimeout === 'function') {
         page.setDefaultTimeout(this.options.fieldTimeoutMs ?? 15000);
+      if (typeof page.addInitScript === 'function') {
+        await page.addInitScript(() => {
+          try {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          } catch {}
+        }).catch(() => {});
+      }
       }
 
       if (typeof page.on === 'function') {
@@ -412,7 +467,7 @@ export class PublisherService {
               u.includes('item/list') ||
               u.includes('works') ||
               u.includes('video/list') ||
-              u.includes('galaxy') || u.includes('aweme') || u.includes('rest/cp') || u.includes('manage') || u.includes('item_list')
+              u.includes('galaxy') || u.includes('aweme') || u.includes('rest/cp') || u.includes('manage') || u.includes('item_list') || u.includes('cp/works') || u.includes('douyin.com') || u.includes('kuaishou.com')
             ) {
               const bodyText = await res.text().catch(() => '');
               if (!bodyText || bodyText.length > 3 * 1024 * 1024) return;
@@ -425,27 +480,73 @@ export class PublisherService {
         });
       }
 
-      await page.goto(adapter.manage, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+            // 1. 精准导航到各平台作品管理页 (Direct Precision Navigation)
+      if (platform === 'douyin') {
+        const douyinManageUrl = 'https://creator.douyin.com/creator-micro/content/manage';
+        await page.goto(douyinManageUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        if (typeof page.waitForSelector === 'function') {
+          await page.waitForSelector('[class*="content-manage"], [class*="manage-card"], [class*="table"], [class*="semi-table"]', { timeout: 8000 }).catch(() => {});
+        }
+      } else if (platform === 'kuaishou') {
+        const kuaishouManageUrl = 'https://cp.kuaishou.com/article/manage/video';
+        await page.goto(kuaishouManageUrl, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+        if (typeof page.waitForSelector === 'function') {
+          await page.waitForSelector('[class*="work"], [class*="video"], [class*="table"], [class*="card"]', { timeout: 8000 }).catch(() => {});
+        }
+      } else {
+        await page.goto(adapter.manage || adapter.home, { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
+      }
+
       await new Promise(r => setTimeout(r, 2000));
       if (typeof page.evaluate === 'function') {
         await page.evaluate(() => {
           try { (globalThis as any).window?.scrollBy(0, 600); } catch {}
         }).catch(() => {});
       }
-      await new Promise(r => setTimeout(r, 2500));
+      await new Promise(r => setTimeout(r, 2000));
 
-      if (platform === 'bilibili' && scrapedList.length === 0 && typeof page.evaluate === 'function') {
-        try {
-          const biliData = await page.evaluate(async () => {
-            try {
-              const r = await (globalThis as any).fetch('https://member.bilibili.com/x/web/archives?status=is_pubing%2Cpubed%2Cnot_pubed&pn=1&ps=20', { credentials: 'include' });
-              return await r.json();
-            } catch { return null; }
-          });
-          if (biliData) {
-            parseApiResponse(platform, 'member.bilibili.com/x/web/archives', biliData, addScraped);
-          }
-        } catch {}
+      if (typeof page.evaluate === 'function') {
+        if (platform === 'bilibili' && scrapedList.length === 0) {
+          try {
+            const biliData = await page.evaluate(async () => {
+              try {
+                const r = await (globalThis as any).fetch('https://member.bilibili.com/x/web/archives?status=is_pubing%2Cpubed%2Cnot_pubed&pn=1&ps=20', { credentials: 'include' });
+                return await r.json();
+              } catch { return null; }
+            });
+            if (biliData) parseApiResponse(platform, 'member.bilibili.com/x/web/archives', biliData, addScraped);
+          } catch {}
+        } else if (platform === 'douyin' && scrapedList.length === 0) {
+          try {
+            const dyData = await page.evaluate(async () => {
+              try {
+                const r = await (globalThis as any).fetch('/web/api/media/aweme/post/?count=20&max_cursor=0', { credentials: 'include' });
+                return await r.json();
+              } catch {
+                try {
+                  const r2 = await (globalThis as any).fetch('/creator-micro/item/list?count=20', { credentials: 'include' });
+                  return await r2.json();
+                } catch { return null; }
+              }
+            });
+            if (dyData) parseApiResponse(platform, 'creator.douyin.com/web/api/media/aweme/post/', dyData, addScraped);
+          } catch {}
+        } else if (platform === 'kuaishou' && scrapedList.length === 0) {
+          try {
+            const ksData = await page.evaluate(async () => {
+              try {
+                const r = await (globalThis as any).fetch('/rest/cp/works/list?workType=0&page=1&pageSize=20', { credentials: 'include' });
+                return await r.json();
+              } catch {
+                try {
+                  const r2 = await (globalThis as any).fetch('/rest/cp/works/video/list?page=1&pageSize=20', { credentials: 'include' });
+                  return await r2.json();
+                } catch { return null; }
+              }
+            });
+            if (ksData) parseApiResponse(platform, 'cp.kuaishou.com/rest/cp/works/list', ksData, addScraped);
+          } catch {}
+        }
       }
 
       if (typeof page.evaluate === 'function') {
@@ -467,33 +568,53 @@ export class PublisherService {
             }
 
             const rows = doc.querySelectorAll(
-              'tbody tr, [class*="note-card"], [class*="noteCard"], [class*="note-item"], [class*="noteItem"], [class*="content-item"], [class*="item-card"], [class*="work-item"], [class*="video-item"], [class*="article-item"]'
+              'tbody tr, [class*="note-card"], [class*="noteCard"], [class*="note-item"], [class*="noteItem"], [class*="content-item"], [class*="item-card"], [class*="work-item"], [class*="video-item"], [class*="article-item"], [class*="card-item"], [class*="table-row"], [class*="semi-table-row"]'
             );
 
             for (const r of Array.from(rows)) {
-              const row = r as { innerText?: string; querySelector?: (s: string) => any };
+              const row = r as { innerText?: string; querySelector?: (s: string) => any; querySelectorAll?: (s: string) => any[] };
               const rowText = row.innerText || '';
               if (rowText.length < 4 || !row.querySelector) continue;
 
-              const titleEl = row.querySelector('[class*="title"], [class*="Title"], [class*="caption"], h3, h4, a[title]');
-              const title = (titleEl?.getAttribute?.('title') || titleEl?.textContent || '').trim();
+              const titleEl = row.querySelector('[class*="title"], [class*="Title"], [class*="caption"], [class*="desc"], [class*="name"], h3, h4, a[title]');
+              let title = (titleEl?.getAttribute?.('title') || titleEl?.textContent || '').trim();
+              if (!title) {
+                const lines = rowText.split('\n').map((s: string) => s.trim()).filter((s: string) => s.length > 2);
+                if (lines[0] && !/^(已发布|审核中|播放|点赞|数据)/.test(lines[0])) {
+                  title = lines[0];
+                }
+              }
               if (!title) return;
 
-              const linkEl = row.querySelector('a[href*="/explore/"], a[href*="/video/"], a[href*="bilibili.com/video"], a[href*="kuaishou.com/short-video"]');
+              const linkEl = row.querySelector('a[href*="/explore/"], a[href*="/video/"], a[href*="bilibili.com/video"], a[href*="kuaishou.com/short-video"], a[href*="douyin.com/video"]');
               const url = linkEl?.href ? String(linkEl.href) : undefined;
 
               let views = 0, likes = 0, comments = 0, shares = 0;
-              const vMatch = rowText.match(/(?:播放|阅读|观看|展现)[^\d]*([\d.,]+[wWkK万]?)/);
+              const vMatch = rowText.match(/(?:播放|阅读|观看|展现|曝光)[^\d]*([\d.,]+[wWkK万]?)/i);
               if (vMatch && vMatch[1]) views = parseNum(vMatch[1]);
 
-              const lMatch = rowText.match(/(?:点赞|获赞|赞)[^\d]*([\d.,]+[wWkK万]?)/);
+              const lMatch = rowText.match(/(?:点赞|获赞|赞)[^\d]*([\d.,]+[wWkK万]?)/i);
               if (lMatch && lMatch[1]) likes = parseNum(lMatch[1]);
 
-              const cMatch = rowText.match(/(?:评论|留言)[^\d]*([\d.,]+[wWkK万]?)/);
+              const cMatch = rowText.match(/(?:评论|留言)[^\d]*([\d.,]+[wWkK万]?)/i);
               if (cMatch && cMatch[1]) comments = parseNum(cMatch[1]);
 
-              const sMatch = rowText.match(/(?:分享|转发)[^\d]*([\d.,]+[wWkK万]?)/);
+              const sMatch = rowText.match(/(?:分享|转发)[^\d]*([\d.,]+[wWkK万]?)/i);
               if (sMatch && sMatch[1]) shares = parseNum(sMatch[1]);
+
+              // 针对快手和抖音常见的指标纯数字列或卡片结构兜底
+              if (views === 0) {
+                const statCols = Array.from(row.querySelectorAll?.('td, [class*="stat"], [class*="num"], [class*="count"], [class*="data"]') || []);
+                for (const col of statCols) {
+                  const txt = ((col as any)?.textContent || '').trim();
+                  if (/^\d+[wWkK万]?$/.test(txt)) {
+                    const val = parseNum(txt);
+                    if (val > 0 && views === 0) {
+                      views = val;
+                    }
+                  }
+                }
+              }
 
               items.push({ title, views, likes, comments, shares, ...(url ? { url } : {}) });
             }

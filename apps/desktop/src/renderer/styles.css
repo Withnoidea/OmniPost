@@ -36,6 +36,10 @@
   --chart-blue: #6C839E;
   --chart-oat: #9B8B6E;
   --chart-sage: #718F77;
+  --platform-douyin: #1E1E22;
+  --platform-bilibili: #00AEEC;
+  --platform-xiaohongshu: #FF2442;
+  --platform-kuaishou: #FF7700;
   --switch-thumb: #FFFFFF;
   --media-overlay: rgba(18, 18, 20, .7);
   --media-text: #F4F4F5;
@@ -86,6 +90,10 @@
   --chart-blue: #92A6BD;
   --chart-oat: #B6AF9E;
   --chart-sage: #8EAA95;
+  --platform-douyin: #F4F4F5;
+  --platform-bilibili: #38BDF8;
+  --platform-xiaohongshu: #FF3B56;
+  --platform-kuaishou: #FFA033;
   --backdrop: rgba(8, 8, 10, .6);
   --shadow-ink: rgba(0, 0, 0, .16);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, .16), 0 1px 2px -1px rgba(0, 0, 0, .2);

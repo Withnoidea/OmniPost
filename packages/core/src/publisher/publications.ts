@@ -277,8 +277,22 @@ export async function syncPlatformMetrics(
       }
     }
 
-    if (bestMatchIdx === -1 && platformPubs.length === 1 && scrapedNotes.length === 1 && !usedScrapedIndices.has(0)) {
-      bestMatchIdx = 0;
+    if (bestMatchIdx === -1) {
+      if (platformPubs.length === 1 && scrapedNotes.length === 1 && !usedScrapedIndices.has(0)) {
+        bestMatchIdx = 0;
+      } else {
+        // 当标题相似度较低但按时间/顺序列表匹配时
+        const pubIdx = platformPubs.indexOf(pub);
+        if (pubIdx >= 0 && pubIdx < scrapedNotes.length && !usedScrapedIndices.has(pubIdx)) {
+          const candidate = scrapedNotes[pubIdx];
+          if (candidate) {
+            const looseScore = calculateTitleSimilarity(pub.title, candidate.title);
+            if (looseScore >= 0.25) {
+              bestMatchIdx = pubIdx;
+            }
+          }
+        }
+      }
     }
 
     if (bestMatchIdx >= 0) {
